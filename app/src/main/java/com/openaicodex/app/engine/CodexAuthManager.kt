@@ -9,6 +9,8 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -269,62 +271,68 @@ class CodexAuthManager(private val context: Context) {
     }
 
     private suspend fun exchangeCodeForTokens(code: String, verifier: String): Result<StoredAuth> {
-        return try {
-            val formBody = FormBody.Builder()
-                .add("grant_type", "authorization_code")
-                .add("code", code)
-                .add("redirect_uri", redirectUri())
-                .add("client_id", CodexAuthConfig.CLIENT_ID)
-                .add("code_verifier", verifier)
-                .build()
+        return withContext(Dispatchers.IO) {
+            try {
+                val formBody = FormBody.Builder()
+                    .add("grant_type", "authorization_code")
+                    .add("code", code)
+                    .add("redirect_uri", redirectUri())
+                    .add("client_id", CodexAuthConfig.CLIENT_ID)
+                    .add("code_verifier", verifier)
+                    .build()
 
-            val request = Request.Builder()
-                .url(CodexAuthConfig.ISSUER + CodexAuthConfig.TOKEN_PATH)
-                .post(formBody)
-                .build()
+                val request = Request.Builder()
+                    .url(CodexAuthConfig.ISSUER + CodexAuthConfig.TOKEN_PATH)
+                    .post(formBody)
+                    .build()
 
-            client.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    val detail = try {
-                        val errorJson = JSONObject(bodyStr)
-                        listOf(
-                            errorJson.optString("error", ""),
-                            errorJson.optString("error_description", "")
-                        ).filter { it.isNotBlank() }.joinToString(": ")
-                    } catch (_: Exception) {
-                        bodyStr
-                    }.ifBlank { "sunucudan ayrıntı alınamadı" }
-                    return Result.failure(RuntimeException("Giriş doğrulanamadı (${response.code}): $detail"))
+                client.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val detail = try {
+                            val errorJson = JSONObject(bodyStr)
+                            listOf(
+                                errorJson.optString("error", ""),
+                                errorJson.optString("error_description", "")
+                            ).filter { it.isNotBlank() }.joinToString(": ")
+                        } catch (_: Exception) {
+                            bodyStr
+                        }.ifBlank { "sunucudan ayrıntı alınamadı" }
+                        return@withContext Result.failure(
+                            RuntimeException("Giriş doğrulanamadı (${response.code}): $detail")
+                        )
+                    }
+
+                    val json = JSONObject(bodyStr)
+                    val accessToken = json.optString("access_token", "")
+                    val refreshToken = json.optString("refresh_token", null)
+                    val idToken = json.optString("id_token", null)
+                    if (accessToken.isEmpty()) {
+                        return@withContext Result.failure(
+                            RuntimeException("Giriş yanıtında access_token bulunamadı")
+                        )
+                    }
+
+                    val claims = idToken?.let { parseJwtClaims(it) }
+                    // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
+                    // account/org id lives under the "https://api.openai.com/auth" claim
+                    // object, as its own nested "chatgpt_account_id" field.
+                    val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
+                    val accountId = authClaim?.optString("chatgpt_account_id", null)
+                    val stored = StoredAuth(
+                        accessToken = accessToken,
+                        refreshToken = refreshToken,
+                        idToken = idToken,
+                        accountId = accountId,
+                        email = claims?.optString("email", null),
+                        obtainedAtMillis = System.currentTimeMillis()
+                    )
+                    persist(stored)
+                    Result.success(stored)
                 }
-
-                val json = JSONObject(bodyStr)
-                val accessToken = json.optString("access_token", "")
-                val refreshToken = json.optString("refresh_token", null)
-                val idToken = json.optString("id_token", null)
-                if (accessToken.isEmpty()) {
-                    return Result.failure(RuntimeException("Giriş yanıtında access_token bulunamadı"))
-                }
-
-                val claims = idToken?.let { parseJwtClaims(it) }
-                // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
-                // account/org id lives under the "https://api.openai.com/auth" claim
-                // object, as its own nested "chatgpt_account_id" field.
-                val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
-                val accountId = authClaim?.optString("chatgpt_account_id", null)
-                val stored = StoredAuth(
-                    accessToken = accessToken,
-                    refreshToken = refreshToken,
-                    idToken = idToken,
-                    accountId = accountId,
-                    email = claims?.optString("email", null),
-                    obtainedAtMillis = System.currentTimeMillis()
-                )
-                persist(stored)
-                Result.success(stored)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 

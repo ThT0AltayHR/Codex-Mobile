@@ -429,10 +429,16 @@ class MainActivity : ComponentActivity() {
                         authManager.writeAuthJsonForNativeRuntime(pathsHandle)
                         onboardingViewModel.onLoginSuccess()
                     }.onFailure {
-                        onboardingViewModel.onLoginError(it.message ?: "Giriş başarısız oldu")
+                        val detail = it.message?.takeIf(String::isNotBlank)
+                            ?: it::class.simpleName
+                            ?: "bilinmeyen hata"
+                        onboardingViewModel.onLoginError("Giriş başarısız oldu: $detail")
                     }
                 }.onFailure {
-                    onboardingViewModel.onLoginError(it.message ?: "Giriş zaman aşımına uğradı veya iptal edildi")
+                    val detail = it.message?.takeIf(String::isNotBlank)
+                        ?: it::class.simpleName
+                        ?: "bilinmeyen hata"
+                    onboardingViewModel.onLoginError("Giriş başarısız oldu: $detail")
                 }
             }
             // Wait for the server to actually bind before opening the
