@@ -1,6 +1,6 @@
-package com.openaicodex.app.ui.screens
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 
-@file:OptIn(ExperimentalFoundationApi::class)
+package com.openaicodex.app.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
