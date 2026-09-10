@@ -7,6 +7,26 @@ android {
     namespace = "com.openaicodex.app"
     compileSdk = 35
 
+    val releaseStoreFile = System.getenv("RELEASE_STORE_FILE")
+    val releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+
+    signingConfigs {
+        if (!releaseStoreFile.isNullOrBlank() &&
+            !releaseStorePassword.isNullOrBlank() &&
+            !releaseKeyAlias.isNullOrBlank() &&
+            !releaseKeyPassword.isNullOrBlank()
+        ) {
+            create("stableRelease") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.openaicodex.app"
         minSdk = 26
@@ -23,6 +43,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (signingConfigs.findByName("stableRelease") != null) {
+                signingConfig = signingConfigs.getByName("stableRelease")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

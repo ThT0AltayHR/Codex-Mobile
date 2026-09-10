@@ -64,6 +64,7 @@ class ChatViewModel(
     private val repository: ConversationRepository,
     private val promptComposer: CodexPromptComposer,
     private val githubAuthManager: com.openaicodex.app.engine.GitHubAuthManager? = null,
+    private val downloadFileExporter: com.openaicodex.app.engine.DownloadFileExporter? = null,
     // Fix: a single shared SecretVault leaked every chat's secrets into
     // every other chat's process env (anything whose name appeared in the
     // prompt text would match, regardless of which conversation actually
@@ -447,6 +448,16 @@ class ChatViewModel(
                 }
             }
             is ThreadEvent.ItemCompleted -> {
+                if (parsed.itemType == "file_change") {
+                    val path = com.openaicodex.app.engine.SamuraiStepMapper.extractFilePath(parsed.raw)
+                    if (path != null) {
+                        val runtime = boundService?.runtime
+                        if (runtime != null) {
+                            val workspace = runtime.workspaceDir(convoId)
+                            downloadFileExporter?.export(workspace, path)
+                        }
+                    }
+                }
                 if (parsed.itemType == "web_search") {
                     val url = ThreadEvent.extractWebSearchUrl(parsed.raw)
                     if (url != null) {

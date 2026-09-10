@@ -98,7 +98,13 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return ChatViewModel(repository, promptComposer, githubAuthManager, ::secretVaultFor) as T
+                return ChatViewModel(
+                    repository,
+                    promptComposer,
+                    githubAuthManager,
+                    com.openaicodex.app.engine.DownloadFileExporter(applicationContext),
+                    ::secretVaultFor
+                ) as T
             }
         }
     }

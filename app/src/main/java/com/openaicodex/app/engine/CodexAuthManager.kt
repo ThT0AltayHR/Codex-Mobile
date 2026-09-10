@@ -2,8 +2,6 @@ package com.openaicodex.app.engine
 
 import android.content.Context
 import android.net.Uri
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
@@ -100,7 +98,13 @@ class CodexAuthManager(private val context: Context) {
         return b64UrlNoPad(bytes).also { pendingState = it }
     }
 
-    private fun redirectUri(): String = "http://localhost:$boundPort/auth/callback"
+    /**
+     * This must stay byte-for-byte identical between the authorize request and
+     * the token exchange. OpenAI's Codex client accepts the registered
+     * localhost ports (1455 and 1457), so never rebuild this from a different
+     * port after the callback server has started.
+     */
+    private fun redirectUri(): String = "http://localhost:${boundPort}/auth/callback"
 
     /**
      * Starts a genuine, short-lived HTTP server on 127.0.0.1, mirroring
@@ -140,10 +144,14 @@ class CodexAuthManager(private val context: Context) {
         try {
             val loopback = java.net.InetAddress.getByName("127.0.0.1")
             val socket = try {
-                java.net.ServerSocket(CodexAuthConfig.DEFAULT_PORT, 0, loopback)
+                java.net.ServerSocket(CodexAuthConfig.DEFAULT_PORT, 50, loopback).apply {
+                    reuseAddress = true
+                }
             } catch (e: java.io.IOException) {
                 try {
-                    java.net.ServerSocket(CodexAuthConfig.FALLBACK_PORT, 0, loopback)
+                    java.net.ServerSocket(CodexAuthConfig.FALLBACK_PORT, 50, loopback).apply {
+                        reuseAddress = true
+                    }
                 } catch (e2: java.io.IOException) {
                     // Fix: a prior version fell back to an OS-assigned
                     // ephemeral port here. That's unsafe — the authorize
@@ -172,28 +180,34 @@ class CodexAuthManager(private val context: Context) {
             // our expected callback path — stray connections are closed
             // and ignored rather than being trusted.
             while (true) {
-                val client = socket.accept()
-                val request = client.getInputStream().bufferedReader().readLine() ?: ""
-                val path = request.split(" ").getOrNull(1) ?: ""
-                val isRealCallback = path.startsWith("/auth/callback")
+                socket.accept().use { client ->
+                    val request = client.getInputStream().bufferedReader().readLine() ?: ""
+                    val target = request.split(" ").getOrNull(1) ?: ""
+                    val uri = android.net.Uri.parse("http://localhost$target")
+                    val isRealCallback = uri.path == "/auth/callback"
 
-                if (isRealCallback) {
-                    val uri = android.net.Uri.parse("http://localhost$path")
-                    code = uri.getQueryParameter("code")
-                    state = uri.getQueryParameter("state")
-                    error = uri.getQueryParameter("error")
-                }
+                    if (isRealCallback) {
+                        code = uri.getQueryParameter("code")
+                        state = uri.getQueryParameter("state")
+                        error = uri.getQueryParameter("error")
+                    }
 
-                val responseBody = if (isRealCallback) {
-                    "<html><body><h2>Giriş tamamlandı, uygulamaya dönebilirsiniz.</h2></body></html>"
-                } else {
-                    "<html><body><h2>Not found</h2></body></html>"
+                    val responseBody = if (isRealCallback) {
+                        "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>" +
+                            "<body><h2>Giriş tamamlandı</h2><p>Bu pencereyi kapatıp Codex'e dönebilirsiniz.</p></body></html>"
+                    } else {
+                        "<html><body><h2>Not found</h2></body></html>"
+                    }
+                    val bodyBytes = responseBody.toByteArray(Charsets.UTF_8)
+                    val statusLine = if (isRealCallback) "HTTP/1.1 200 OK" else "HTTP/1.1 404 Not Found"
+                    val response = "$statusLine\r\nContent-Type: text/html; charset=utf-8\r\n" +
+                        "Content-Length: ${bodyBytes.size}\r\nConnection: close\r\n\r\n"
+                    client.getOutputStream().use { output ->
+                        output.write(response.toByteArray(Charsets.UTF_8))
+                        output.write(bodyBytes)
+                        output.flush()
+                    }
                 }
-                val statusLine = if (isRealCallback) "HTTP/1.1 200 OK" else "HTTP/1.1 404 Not Found"
-                val response = "$statusLine\r\nContent-Type: text/html\r\nContent-Length: ${responseBody.toByteArray().size}\r\n\r\n$responseBody"
-                client.getOutputStream().write(response.toByteArray())
-                client.getOutputStream().flush()
-                client.close()
 
                 if (isRealCallback) break
             }
@@ -265,37 +279,46 @@ class CodexAuthManager(private val context: Context) {
                 .post(formBody)
                 .build()
 
-            val response = client.newCall(request).execute()
-            val bodyStr = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                return Result.failure(RuntimeException("Token exchange failed (${response.code}): $bodyStr"))
-            }
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val detail = try {
+                        val errorJson = JSONObject(bodyStr)
+                        listOf(
+                            errorJson.optString("error", ""),
+                            errorJson.optString("error_description", "")
+                        ).filter { it.isNotBlank() }.joinToString(": ")
+                    } catch (_: Exception) {
+                        bodyStr
+                    }.ifBlank { "sunucudan ayrıntı alınamadı" }
+                    return Result.failure(RuntimeException("Giriş doğrulanamadı (${response.code}): $detail"))
+                }
 
-            val json = JSONObject(bodyStr)
-            val accessToken = json.optString("access_token", "")
-            val refreshToken = json.optString("refresh_token", null)
-            val idToken = json.optString("id_token", null)
-            if (accessToken.isEmpty()) {
-                return Result.failure(RuntimeException("No access_token in response"))
-            }
+                val json = JSONObject(bodyStr)
+                val accessToken = json.optString("access_token", "")
+                val refreshToken = json.optString("refresh_token", null)
+                val idToken = json.optString("id_token", null)
+                if (accessToken.isEmpty()) {
+                    return Result.failure(RuntimeException("Giriş yanıtında access_token bulunamadı"))
+                }
 
-            val claims = idToken?.let { parseJwtClaims(it) }
-            // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
-            // account/org id lives under the "https://api.openai.com/auth" claim
-            // object, as its own nested "chatgpt_account_id" field — not as the
-            // claim object itself stringified.
-            val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
-            val accountId = authClaim?.optString("chatgpt_account_id", null)
-            val stored = StoredAuth(
-                accessToken = accessToken,
-                refreshToken = refreshToken,
-                idToken = idToken,
-                accountId = accountId,
-                email = claims?.optString("email", null),
-                obtainedAtMillis = System.currentTimeMillis()
-            )
-            persist(stored)
-            Result.success(stored)
+                val claims = idToken?.let { parseJwtClaims(it) }
+                // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
+                // account/org id lives under the "https://api.openai.com/auth" claim
+                // object, as its own nested "chatgpt_account_id" field.
+                val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
+                val accountId = authClaim?.optString("chatgpt_account_id", null)
+                val stored = StoredAuth(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken,
+                    idToken = idToken,
+                    accountId = accountId,
+                    email = claims?.optString("email", null),
+                    obtainedAtMillis = System.currentTimeMillis()
+                )
+                persist(stored)
+                Result.success(stored)
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
