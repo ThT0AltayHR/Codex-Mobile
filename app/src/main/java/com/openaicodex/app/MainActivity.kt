@@ -423,22 +423,28 @@ class MainActivity : ComponentActivity() {
             val serverReady = kotlinx.coroutines.CompletableDeferred<Unit>()
             lifecycleScope.launch {
                 val result = authManager.startCallbackServerAndAwaitCode(onBound = { serverReady.complete(Unit) })
-                result.onSuccess { (code, state) ->
-                    val loginResult = authManager.completeLogin(code, state)
-                    loginResult.onSuccess {
+                // Fix: the callback server now performs the full token
+                // exchange itself (see startCallbackServerAndAwaitCode doc)
+                // before ever responding to the browser, so `result` here
+                // is already the final StoredAuth outcome — no second
+                // completeLogin() call is needed or correct anymore.
+                result.onSuccess {
+                    try {
                         authManager.writeAuthJsonForNativeRuntime(pathsHandle)
                         onboardingViewModel.onLoginSuccess()
-                    }.onFailure {
-                        val detail = it.message?.takeIf(String::isNotBlank)
-                            ?: it::class.simpleName
-                            ?: "bilinmeyen hata"
-                        onboardingViewModel.onLoginError("Giriş başarısız oldu: $detail")
+                    } catch (e: Exception) {
+                        // Fix: writing auth.json for the native runtime was
+                        // previously unguarded — any failure here (disk
+                        // full, permission issue) threw uncaught inside a
+                        // coroutine after the OAuth exchange had already
+                        // succeeded, which could crash the app right at
+                        // the finish line instead of reporting a clear error.
+                        onboardingViewModel.onLoginError(
+                            "Giriş doğrulandı ama yerel kayıt başarısız oldu: ${e.javaClass.simpleName}: ${e.message ?: "detay yok"}"
+                        )
                     }
                 }.onFailure {
-                    val detail = it.message?.takeIf(String::isNotBlank)
-                        ?: it::class.simpleName
-                        ?: "bilinmeyen hata"
-                    onboardingViewModel.onLoginError("Giriş başarısız oldu: $detail")
+                    onboardingViewModel.onLoginError(it.message ?: "Giriş başarısız oldu")
                 }
             }
             // Wait for the server to actually bind before opening the

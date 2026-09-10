@@ -9,8 +9,6 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -60,7 +58,12 @@ data class StoredAuth(
 
 class CodexAuthManager(private val context: Context) {
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
 
     private val prefs by lazy {
         val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -138,7 +141,24 @@ class CodexAuthManager(private val context: Context) {
      *    stray unrelated localhost connection (e.g. another app probing
      *    open ports) can no longer be misread as a callback attempt.
      */
-    suspend fun startCallbackServerAndAwaitCode(onBound: () -> Unit = {}): Result<Pair<String, String>> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /**
+     * Fix (root cause of the "OpenAI ile giriş yap" bug): the real Codex
+     * CLI (codex-rs/login/src/server.rs::process_request) only tells the
+     * browser sign-in succeeded AFTER exchanging the code for tokens and
+     * persisting them. If that exchange fails, the browser is shown a real
+     * error page — the CLI never claims success before it's actually true.
+     *
+     * This method previously did the opposite: it wrote the "Giriş
+     * tamamlandı" HTML back to the browser the instant it saw `code` and
+     * `state` on the callback request, and only attempted the real token
+     * exchange afterward, back in MainActivity. That is exactly why the
+     * browser could show success while the app then reported "Giriş
+     * başarısız oldu" — the success page was never conditioned on the
+     * exchange actually working. Now the exchange happens first, inside
+     * the request handler, before any response is written, and the HTML
+     * sent back genuinely reflects whether login succeeded.
+     */
+    suspend fun startCallbackServerAndAwaitCode(onBound: () -> Unit = {}): Result<StoredAuth> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         if (loginInFlight) {
             return@withContext Result.failure(RuntimeException("Zaten devam eden bir giriş denemesi var"))
         }
@@ -174,10 +194,8 @@ class CodexAuthManager(private val context: Context) {
 
             socket.soTimeout = 5 * 60 * 1000 // 5 minute window for the user to complete sign-in in the browser
 
-            var code: String? = null
-            var state: String? = null
-            var error: String? = null
             var isRealCallback = false
+            var outcome: Result<StoredAuth>? = null
 
             // Loop accepting connections until we see one that is actually
             // our expected callback path — stray connections are closed
@@ -189,20 +207,43 @@ class CodexAuthManager(private val context: Context) {
                     val uri = android.net.Uri.parse("http://localhost$target")
                     isRealCallback = uri.path == "/auth/callback"
 
+                    val responseBody: String
+                    val statusLine: String
+
                     if (isRealCallback) {
-                        code = uri.getQueryParameter("code")
-                        state = uri.getQueryParameter("state")
-                        error = uri.getQueryParameter("error")
+                        val code = uri.getQueryParameter("code")
+                        val state = uri.getQueryParameter("state")
+                        val oauthError = uri.getQueryParameter("error")
+
+                        // Do the whole rest of the login — state check,
+                        // code-for-token exchange, in-memory persist — right
+                        // here, BEFORE writing any HTTP response, exactly
+                        // like upstream. Whatever HTML we send back is only
+                        // ever written after we genuinely know the outcome.
+                        outcome = when {
+                            oauthError != null -> Result.failure(RuntimeException("OAuth hatası: $oauthError"))
+                            code == null || state == null ->
+                                Result.failure(RuntimeException("Callback isteğinde code/state eksik"))
+                            else -> completeLogin(code, state)
+                        }
+
+                        if (outcome!!.isSuccess) {
+                            responseBody = "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>" +
+                                "<body><h2>Giriş tamamlandı</h2><p>Bu pencereyi kapatıp Codex'e dönebilirsiniz.</p></body></html>"
+                            statusLine = "HTTP/1.1 200 OK"
+                        } else {
+                            val reason = outcome!!.exceptionOrNull()?.message ?: "Bilinmeyen hata"
+                            responseBody = "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>" +
+                                "<body><h2>Giriş başarısız oldu</h2><p>${android.text.Html.escapeHtml(reason)}</p>" +
+                                "<p>Bu pencereyi kapatıp Codex'e dönüp tekrar deneyebilirsiniz.</p></body></html>"
+                            statusLine = "HTTP/1.1 200 OK"
+                        }
+                    } else {
+                        responseBody = "<html><body><h2>Not found</h2></body></html>"
+                        statusLine = "HTTP/1.1 404 Not Found"
                     }
 
-                    val responseBody = if (isRealCallback) {
-                        "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head>" +
-                            "<body><h2>Giriş tamamlandı</h2><p>Bu pencereyi kapatıp Codex'e dönebilirsiniz.</p></body></html>"
-                    } else {
-                        "<html><body><h2>Not found</h2></body></html>"
-                    }
                     val bodyBytes = responseBody.toByteArray(Charsets.UTF_8)
-                    val statusLine = if (isRealCallback) "HTTP/1.1 200 OK" else "HTTP/1.1 404 Not Found"
                     val response = "$statusLine\r\nContent-Type: text/html; charset=utf-8\r\n" +
                         "Content-Length: ${bodyBytes.size}\r\nConnection: close\r\n\r\n"
                     client.getOutputStream().use { output ->
@@ -218,16 +259,21 @@ class CodexAuthManager(private val context: Context) {
             socket.close()
             callbackServer = null
 
-            val callbackCode = code
-            val callbackState = state
-            when {
-                error != null -> Result.failure(RuntimeException("OAuth error: $error"))
-                callbackCode == null || callbackState == null ->
-                    Result.failure(RuntimeException("Callback isteğinde code/state eksik"))
-                else -> Result.success(callbackCode to callbackState)
-            }
+            outcome ?: Result.failure(RuntimeException("Callback alınamadı"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Fix: CancellationException extends Exception, so a plain
+            // `catch (e: Exception)` here was swallowing normal coroutine
+            // cancellation (e.g. the Activity/screen going away mid-flow)
+            // and turning it into a fake "login failed" Result instead of
+            // honoring structured concurrency. Must always rethrow.
+            throw e
         } catch (e: Exception) {
-            Result.failure(e)
+            // Fix: previously this could surface to the UI as a bare,
+            // unhelpful "Giriş başarısız oldu" whenever e.message was null
+            // (common for some low-level network/SSL exceptions), giving
+            // no way to diagnose a real recurring failure. Always include
+            // the concrete exception type so it's actionable.
+            Result.failure(RuntimeException("Yerel giriş sunucusu hatası: ${e.javaClass.simpleName}: ${e.message ?: "detay yok"}", e))
         } finally {
             try { callbackServer?.close() } catch (_: Exception) {}
             callbackServer = null
@@ -259,8 +305,10 @@ class CodexAuthManager(private val context: Context) {
     }
 
     /**
-     * Call this AFTER startCallbackServerAndAwaitCode() has returned a
-     * (code, state) pair. Validates state, exchanges the code for tokens.
+     * Validates state and exchanges the code for tokens. Called internally
+     * by startCallbackServerAndAwaitCode() from inside the request handler,
+     * before that handler responds to the browser — see the fix note there
+     * for why the ordering matters.
      */
     suspend fun completeLogin(code: String, returnedState: String): Result<StoredAuth> {
         if (returnedState != pendingState) {
@@ -271,68 +319,68 @@ class CodexAuthManager(private val context: Context) {
     }
 
     private suspend fun exchangeCodeForTokens(code: String, verifier: String): Result<StoredAuth> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val formBody = FormBody.Builder()
-                    .add("grant_type", "authorization_code")
-                    .add("code", code)
-                    .add("redirect_uri", redirectUri())
-                    .add("client_id", CodexAuthConfig.CLIENT_ID)
-                    .add("code_verifier", verifier)
-                    .build()
+        return try {
+            val formBody = FormBody.Builder()
+                .add("grant_type", "authorization_code")
+                .add("code", code)
+                .add("redirect_uri", redirectUri())
+                .add("client_id", CodexAuthConfig.CLIENT_ID)
+                .add("code_verifier", verifier)
+                .build()
 
-                val request = Request.Builder()
-                    .url(CodexAuthConfig.ISSUER + CodexAuthConfig.TOKEN_PATH)
-                    .post(formBody)
-                    .build()
+            val request = Request.Builder()
+                .url(CodexAuthConfig.ISSUER + CodexAuthConfig.TOKEN_PATH)
+                .post(formBody)
+                .build()
 
-                client.newCall(request).execute().use { response ->
-                    val bodyStr = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        val detail = try {
-                            val errorJson = JSONObject(bodyStr)
-                            listOf(
-                                errorJson.optString("error", ""),
-                                errorJson.optString("error_description", "")
-                            ).filter { it.isNotBlank() }.joinToString(": ")
-                        } catch (_: Exception) {
-                            bodyStr
-                        }.ifBlank { "sunucudan ayrıntı alınamadı" }
-                        return@withContext Result.failure(
-                            RuntimeException("Giriş doğrulanamadı (${response.code}): $detail")
-                        )
-                    }
-
-                    val json = JSONObject(bodyStr)
-                    val accessToken = json.optString("access_token", "")
-                    val refreshToken = json.optString("refresh_token", null)
-                    val idToken = json.optString("id_token", null)
-                    if (accessToken.isEmpty()) {
-                        return@withContext Result.failure(
-                            RuntimeException("Giriş yanıtında access_token bulunamadı")
-                        )
-                    }
-
-                    val claims = idToken?.let { parseJwtClaims(it) }
-                    // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
-                    // account/org id lives under the "https://api.openai.com/auth" claim
-                    // object, as its own nested "chatgpt_account_id" field.
-                    val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
-                    val accountId = authClaim?.optString("chatgpt_account_id", null)
-                    val stored = StoredAuth(
-                        accessToken = accessToken,
-                        refreshToken = refreshToken,
-                        idToken = idToken,
-                        accountId = accountId,
-                        email = claims?.optString("email", null),
-                        obtainedAtMillis = System.currentTimeMillis()
-                    )
-                    persist(stored)
-                    Result.success(stored)
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val detail = try {
+                        val errorJson = JSONObject(bodyStr)
+                        listOf(
+                            errorJson.optString("error", ""),
+                            errorJson.optString("error_description", "")
+                        ).filter { it.isNotBlank() }.joinToString(": ")
+                    } catch (_: Exception) {
+                        bodyStr
+                    }.ifBlank { "sunucudan ayrıntı alınamadı" }
+                    return Result.failure(RuntimeException("Giriş doğrulanamadı (${response.code}): $detail"))
                 }
-            } catch (e: Exception) {
-                Result.failure(e)
+
+                val json = JSONObject(bodyStr)
+                val accessToken = json.optString("access_token", "")
+                val refreshToken = json.optString("refresh_token", null)
+                val idToken = json.optString("id_token", null)
+                if (accessToken.isEmpty()) {
+                    return Result.failure(RuntimeException("Giriş yanıtında access_token bulunamadı"))
+                }
+
+                val claims = idToken?.let { parseJwtClaims(it) }
+                // Real upstream shape (codex-rs/login/src/token_data.rs IdTokenInfo):
+                // account/org id lives under the "https://api.openai.com/auth" claim
+                // object, as its own nested "chatgpt_account_id" field.
+                val authClaim = claims?.optJSONObject("https://api.openai.com/auth")
+                val accountId = authClaim?.optString("chatgpt_account_id", null)
+                val stored = StoredAuth(
+                    accessToken = accessToken,
+                    refreshToken = refreshToken,
+                    idToken = idToken,
+                    accountId = accountId,
+                    email = claims?.optString("email", null),
+                    obtainedAtMillis = System.currentTimeMillis()
+                )
+                persist(stored)
+                Result.success(stored)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Same fix as above: surface the real exception type/message
+            // (host resolution failures, SSL errors, etc. all have
+            // distinct causes) instead of a message that can end up null
+            // and fall back to a generic, undiagnosable "login failed".
+            Result.failure(RuntimeException("Token isteği başarısız: ${e.javaClass.simpleName}: ${e.message ?: "detay yok"}", e))
         }
     }
 
