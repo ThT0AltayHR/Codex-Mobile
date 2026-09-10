@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The OAuth callback server binds to 127.0.0.1 and the system
+         browser is redirected to it over plain HTTP, exactly like the
+         desktop Codex CLI's localhost callback. This is loopback-only
+         traffic that never leaves the device, so cleartext here is safe
+         and necessary — it is not a general cleartext allowance. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

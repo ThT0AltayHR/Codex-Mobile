@@ -1,0 +1,71 @@
+name: Build Codex Mobile APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Native binary is 250MB+, must ship via Git LFS. See BUILD.md.
+      - name: Pull Git LFS files
+        run: git lfs pull
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Regenerate Gradle wrapper (jar not vendored in this repo)
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "gradle-wrapper.jar missing, bootstrapping via SDKMAN-installed Gradle..."
+            curl -sSL https://get.sdkman.io | bash
+            source "$HOME/.sdkman/bin/sdkman-init.sh"
+            sdk install gradle 8.9 < /dev/null
+            gradle wrapper --gradle-version 8.9
+          else
+            echo "gradle-wrapper.jar already present, skipping bootstrap."
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Verify native binary is present and correct size
+        run: |
+          FILE="app/src/main/jniLibs/arm64-v8a/libcodexcore.so"
+          if [ ! -f "$FILE" ]; then
+            echo "::error::Native binary missing at $FILE — did Git LFS pull correctly?"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE")
+          echo "libcodexcore.so size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::Native binary looks too small ($SIZE bytes) — likely an LFS pointer file, not the real binary."
+            exit 1
+          fi
+
+      - name: Lint
+        run: ./gradlew lint --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-mobile-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
