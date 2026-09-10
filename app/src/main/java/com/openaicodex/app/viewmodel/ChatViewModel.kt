@@ -497,7 +497,7 @@ class ChatViewModel(
                 // Attach real sources only to the last segment of this
                 // reply, so they render once beneath the actual answer
                 // rather than repeated under every code block.
-                webSources = if (index == segments.lastIndex) sourcesForThisReply else emptyList()
+                webSources = if (index == segments.lastIndex) sourcesForThisReply else emptyList(),
                 generatedFiles = if (index == segments.lastIndex) {
                     collectedGeneratedFilesForCurrentTurn.toList()
                 } else {

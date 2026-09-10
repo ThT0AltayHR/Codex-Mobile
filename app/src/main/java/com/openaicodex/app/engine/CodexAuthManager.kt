@@ -175,6 +175,7 @@ class CodexAuthManager(private val context: Context) {
             var code: String? = null
             var state: String? = null
             var error: String? = null
+            var isRealCallback = false
 
             // Loop accepting connections until we see one that is actually
             // our expected callback path — stray connections are closed
@@ -184,7 +185,7 @@ class CodexAuthManager(private val context: Context) {
                     val request = client.getInputStream().bufferedReader().readLine() ?: ""
                     val target = request.split(" ").getOrNull(1) ?: ""
                     val uri = android.net.Uri.parse("http://localhost$target")
-                    val isRealCallback = uri.path == "/auth/callback"
+                    isRealCallback = uri.path == "/auth/callback"
 
                     if (isRealCallback) {
                         code = uri.getQueryParameter("code")
@@ -215,10 +216,13 @@ class CodexAuthManager(private val context: Context) {
             socket.close()
             callbackServer = null
 
+            val callbackCode = code
+            val callbackState = state
             when {
                 error != null -> Result.failure(RuntimeException("OAuth error: $error"))
-                code == null || state == null -> Result.failure(RuntimeException("Callback isteğinde code/state eksik"))
-                else -> Result.success(code to state)
+                callbackCode == null || callbackState == null ->
+                    Result.failure(RuntimeException("Callback isteğinde code/state eksik"))
+                else -> Result.success(callbackCode to callbackState)
             }
         } catch (e: Exception) {
             Result.failure(e)

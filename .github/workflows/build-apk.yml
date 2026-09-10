@@ -82,21 +82,21 @@ jobs:
         run: |
           ./gradlew assembleRelease --stacktrace
           mkdir -p app/build/outputs/apk/stable
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/stable/Codex.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/stable/CODEX.apk
 
       - name: Upload stable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Codex
-          path: app/build/outputs/apk/stable/Codex.apk
+          name: CODEX
+          path: app/build/outputs/apk/stable/CODEX.apk
           retention-days: 90
 
       - name: Publish latest stable release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: codex-mobile-stable-${{ github.sha }}
-          name: Codex Mobile Stable
+          name: CODEX
           prerelease: false
           draft: false
           generate_release_notes: true
-          files: app/build/outputs/apk/stable/Codex.apk
+          files: app/build/outputs/apk/stable/CODEX.apk
