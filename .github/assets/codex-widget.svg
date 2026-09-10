@@ -1,0 +1,84 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Mobile — Android AI coding workspace</title>
+  <desc id="desc">Animated dark developer widget for the Codex Mobile Android application.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08090D"/>
+      <stop offset="0.48" stop-color="#10131D"/>
+      <stop offset="1" stop-color="#1A1027"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="220" y1="60" x2="970" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B8CFF"/>
+      <stop offset="0.5" stop-color="#62E6FF"/>
+      <stop offset="1" stop-color="#FF78C8"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#A99BFF" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#62E6FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#FF78C8" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <clipPath id="clip"><rect width="1200" height="360" rx="28"/></clipPath>
+  </defs>
+  <g clip-path="url(#clip)">
+    <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+    <circle cx="940" cy="42" r="170" fill="#8D73FF" fill-opacity=".13" filter="url(#soft)">
+      <animate attributeName="cy" values="42;76;42" dur="7s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="1060" cy="320" r="190" fill="#FF5CC8" fill-opacity=".08" filter="url(#soft)">
+      <animate attributeName="cx" values="1060;1010;1060" dur="9s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M0 286C194 218 275 336 477 270C671 207 762 78 1200 177" stroke="url(#line)" stroke-width="2" opacity=".7">
+      <animate attributeName="d" dur="8s" repeatCount="indefinite"
+        values="M0 286C194 218 275 336 477 270C671 207 762 78 1200 177;M0 256C194 316 310 206 505 274C700 342 824 116 1200 208;M0 286C194 218 275 336 477 270C671 207 762 78 1200 177"/>
+    </path>
+    <g opacity=".32" stroke="#9D91FF">
+      <path d="M784 0V360"/><path d="M896 0V360"/><path d="M1008 0V360"/>
+      <path d="M720 86H1200"/><path d="M720 198H1200"/><path d="M720 310H1200"/>
+    </g>
+    <g filter="url(#glow)">
+      <circle cx="824" cy="96" r="5" fill="#62E6FF">
+        <animate attributeName="cy" values="96;124;96" dur="2.8s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="1018" cy="188" r="4" fill="#FF78C8">
+        <animate attributeName="cx" values="1018;980;1018" dur="3.6s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="1118" cy="82" r="4" fill="#A99BFF">
+        <animate attributeName="cy" values="82;62;82" dur="2.2s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <g transform="translate(72 62)">
+      <text x="0" y="0" fill="#B6AFFF" font-family="monospace" font-size="14" letter-spacing="3">OPENAI CODEX • ANDROID WORKSPACE</text>
+      <text x="0" y="82" fill="white" font-family="sans-serif" font-size="58" font-weight="800" letter-spacing="-2">CODEX<tspan fill="url(#accent)"> MOBILE</tspan></text>
+      <text x="4" y="125" fill="#D6D7E4" font-family="sans-serif" font-size="20">Think. Build. Run. Ship from your phone.</text>
+      <g transform="translate(0 174)">
+        <rect width="132" height="38" rx="19" fill="#FFFFFF" fill-opacity=".1" stroke="#FFFFFF" stroke-opacity=".22"/>
+        <text x="20" y="25" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="700">✦ AI coding</text>
+        <rect x="144" width="154" height="38" rx="19" fill="#FFFFFF" fill-opacity=".1" stroke="#FFFFFF" stroke-opacity=".22"/>
+        <text x="164" y="25" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="700">⌘ Native Android</text>
+        <rect x="310" width="135" height="38" rx="19" fill="#FFFFFF" fill-opacity=".1" stroke="#FFFFFF" stroke-opacity=".22"/>
+        <text x="330" y="25" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="700">↗ Open source</text>
+      </g>
+    </g>
+    <g transform="translate(768 70)">
+      <rect width="354" height="214" rx="18" fill="#090A10" fill-opacity=".78" stroke="#FFFFFF" stroke-opacity=".15"/>
+      <circle cx="24" cy="24" r="5" fill="#FF6B8B"/><circle cx="43" cy="24" r="5" fill="#FFD36B"/><circle cx="62" cy="24" r="5" fill="#6BFFA8"/>
+      <text x="24" y="65" fill="#8990AA" font-family="monospace" font-size="12">$ codex exec --json</text>
+      <text x="24" y="96" fill="#A99BFF" font-family="monospace" font-size="13">›</text>
+      <text x="43" y="96" fill="#F1F2FA" font-family="monospace" font-size="13">build a better app</text>
+      <text x="24" y="130" fill="#62E6FF" font-family="monospace" font-size="12">✓ workspace ready</text>
+      <text x="24" y="157" fill="#FF78C8" font-family="monospace" font-size="12">✓ agent connected</text>
+      <text x="24" y="184" fill="#6BFFA8" font-family="monospace" font-size="12">✓ ship the next idea</text>
+      <rect x="24" y="198" width="118" height="2" fill="url(#accent)">
+        <animate attributeName="width" values="40;180;40" dur="2.1s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <rect x="1" y="1" width="1198" height="358" rx="27" stroke="#FFFFFF" stroke-opacity=".14" stroke-width="2"/>
+  </g>
+</svg>
