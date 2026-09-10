@@ -1,5 +1,6 @@
 package com.openaicodex.app.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -38,7 +39,7 @@ import com.openaicodex.app.viewmodel.ChatUiState
 import com.openaicodex.app.viewmodel.PendingAttachment
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     state: ChatUiState,
