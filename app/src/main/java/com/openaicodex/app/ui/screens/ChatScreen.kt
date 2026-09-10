@@ -1,5 +1,7 @@
 package com.openaicodex.app.ui.screens
 
+@file:OptIn(ExperimentalFoundationApi::class)
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
