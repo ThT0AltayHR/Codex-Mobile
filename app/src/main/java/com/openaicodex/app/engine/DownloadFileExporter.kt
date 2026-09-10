@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -44,6 +45,7 @@ class DownloadFileExporter(private val context: Context) {
         return if (canonical.path.startsWith(rootPath) && canonical != root) canonical else null
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun exportWithMediaStore(source: File): File? {
         val resolver = context.contentResolver
         val displayName = uniqueDisplayName(source.name)
@@ -84,6 +86,7 @@ class DownloadFileExporter(private val context: Context) {
         return target
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun uniqueDisplayName(original: String): String {
         val downloads = "${Environment.DIRECTORY_DOWNLOADS}/Codex"
         val projection = arrayOf(MediaStore.Downloads.DISPLAY_NAME)
