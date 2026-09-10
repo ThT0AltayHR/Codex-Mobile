@@ -1,6 +1,7 @@
 package com.codex.mobile.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -354,6 +355,7 @@ private fun ChatInputBar(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ConversationHistoryDrawer(
     conversations: List<Conversation>,
     onOpen: (String) -> Unit,

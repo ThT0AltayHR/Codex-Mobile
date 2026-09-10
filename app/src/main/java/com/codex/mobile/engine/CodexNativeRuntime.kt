@@ -199,27 +199,20 @@ class CodexNativeRuntime(private val context: Context) {
      * has already forked further children, those can be left running
      * as orphans after the "stop" button is pressed.
      *
-     * `Process#descendants()` (API 26+) is a real, documented JDK/Android
-     * API for exactly this — it is not custom process-tree bookkeeping.
-     * On the rare pre-26 path (this app's minSdk is already 26 so this
-     * is defensive only) we fall back to plain destroy().
+     * Android's `java.lang.Process` does not expose the desktop JDK
+     * `ProcessHandle`/`toHandle()` API. We therefore terminate the direct
+     * child using the Android-supported Process APIs; the native runtime is
+     * responsible for cleaning up its own descendants.
      */
     fun destroyWithChildren() {
         running.set(false)
         val proc = process ?: return
         try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                val handle = proc.toHandle()
-                handle.descendants().forEach { descendant ->
-                    try {
-                        descendant.destroyForcibly()
-                    } catch (_: Exception) {
-                    }
-                }
+            if (proc.isAlive) {
+                proc.destroy()
             }
         } catch (_: Exception) {
-            // descendants() can throw on some OEM kernels that restrict
-            // /proc access; the direct destroy below still runs.
+            // The direct forceful termination below is the fallback.
         }
         if (proc.isAlive) {
             proc.destroyForcibly()
