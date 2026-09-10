@@ -55,22 +55,22 @@ Actions'ı tetikler ve otomatik olarak:
 5. Gradle wrapper'ı yeniden oluşturur (bu repo'da `gradle-wrapper.jar`
    bulunmuyor çünkü internetsiz ortamda ikili dosya indiremedim — CI bunu
    kendisi indirir, tamamen otomatik)
-6. İmzalı release APK'sını `./gradlew assembleRelease` ile derler
-7. APK'yı `Codex.apk` adıyla bir **Artifact** ve `Codex Mobile Stable` GitHub Release'i olarak yayınlar
+6. `./gradlew assembleDebug` ile APK'yı derler
+7. Derlenen APK'yı bir **Artifact** olarak GitHub Actions sayfasına yükler
 
 ## 4) APK'yı indirme
 
 - GitHub reposunda **Actions** sekmesine git
 - En son çalışan workflow'a tıkla ("Build Codex Mobile APK")
-- Sayfanın altında **Artifacts** bölümünde `Codex` göreceksin
-- Ona tıklayınca bir `.zip` iner, içinde `Codex.apk` var
+- Sayfanın altında **Artifacts** bölümünde `codex-mobile-debug-apk` göreceksin
+- Ona tıklayınca bir `.zip` iner, içinde `app-debug.apk` var
 - Bu APK'yı telefonuna kopyala (Google Drive, kendine mail atma, vs.) ve kur
   (Ayarlar'dan "bilinmeyen kaynaklardan yükleme"ye izin vermen gerekebilir)
 
 ## Bilinmesi gerekenler / sınırlamalar
 
-- **Bu bir release APK**'dır. Workflow her derlemede kurulum için imzalı
-  `Codex.apk` üretir; Google Play yayın koşulları ayrıca karşılanmalıdır.
+- **Bu bir debug APK** — imzasız, test amaçlı. Google Play'e yüklenemez ama
+  kendi telefonuna kurup kullanmak için tamamen yeterli.
 - **Sadece arm64-v8a (ARM64) cihazlarda çalışır** — modern Android
   telefonların neredeyse tamamı bu mimaride, dolayısıyla senin telefonun
   (Android 16) sorunsuz çalışır. Çok eski/düşük bütçeli bazı cihazlar
