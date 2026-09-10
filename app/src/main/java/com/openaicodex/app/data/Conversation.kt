@@ -2,6 +2,8 @@ package com.openaicodex.app.data
 
 data class WebSource(val url: String, val domain: String)
 
+data class GeneratedFile(val name: String, val path: String)
+
 data class ChatMessage(
     val id: String,
     val role: Role,
@@ -12,6 +14,7 @@ data class ChatMessage(
     val attachedFileName: String? = null,
     val attachedFilePath: String? = null,
     val generatedImagePath: String? = null,
+    val generatedFiles: List<GeneratedFile> = emptyList(),
     /** Real URLs Codex actually visited during this turn, extracted from web_search item events — never fabricated. */
     val webSources: List<WebSource> = emptyList()
 ) {

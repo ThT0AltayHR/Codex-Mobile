@@ -212,6 +212,14 @@ class ConversationRepository(context: Context) {
         put("attachedFileName", m.attachedFileName)
         put("attachedFilePath", m.attachedFilePath)
         put("generatedImagePath", m.generatedImagePath)
+        val generatedFilesArr = JSONArray()
+        m.generatedFiles.forEach { file ->
+            generatedFilesArr.put(JSONObject().apply {
+                put("name", file.name)
+                put("path", file.path)
+            })
+        }
+        put("generatedFiles", generatedFilesArr)
         val sourcesArr = JSONArray()
         m.webSources.forEach { src ->
             sourcesArr.put(JSONObject().apply { put("url", src.url); put("domain", src.domain) })
@@ -227,6 +235,16 @@ class ConversationRepository(context: Context) {
                 com.openaicodex.app.data.WebSource(s.getString("url"), s.getString("domain"))
             }
         } else emptyList()
+        val generatedFilesArr = o.optJSONArray("generatedFiles")
+        val generatedFiles = if (generatedFilesArr != null) {
+            (0 until generatedFilesArr.length()).mapNotNull {
+                generatedFilesArr.optJSONObject(it)?.let { file ->
+                    val name = file.optString("name", "")
+                    val path = file.optString("path", "")
+                    if (name.isNotBlank() && path.isNotBlank()) GeneratedFile(name, path) else null
+                }
+            }
+        } else emptyList()
         return ChatMessage(
             id = o.getString("id"),
             role = ChatMessage.Role.valueOf(o.getString("role")),
@@ -237,6 +255,7 @@ class ConversationRepository(context: Context) {
             attachedFileName = o.optString("attachedFileName", null).takeIf { o.has("attachedFileName") && !o.isNull("attachedFileName") },
             attachedFilePath = o.optString("attachedFilePath", null).takeIf { o.has("attachedFilePath") && !o.isNull("attachedFilePath") },
             generatedImagePath = o.optString("generatedImagePath", null).takeIf { o.has("generatedImagePath") && !o.isNull("generatedImagePath") },
+            generatedFiles = generatedFiles,
             webSources = sources
         )
     }

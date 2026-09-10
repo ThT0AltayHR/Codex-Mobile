@@ -30,6 +30,7 @@ import androidx.compose.animation.togetherWith
 import com.openaicodex.app.data.ChatMessage
 import com.openaicodex.app.data.Conversation
 import com.openaicodex.app.data.Effort
+import com.openaicodex.app.data.GeneratedFile
 import com.openaicodex.app.data.ModelCatalog
 import com.openaicodex.app.data.SelectedModel
 import com.openaicodex.app.ui.components.CodeBlockCard
@@ -62,7 +63,8 @@ fun ChatScreen(
     onOpenSecretVault: () -> Unit = {},
     onSelectModel: (SelectedModel) -> Unit = {},
     onDismissTokenLimit: () -> Unit = {},
-    onOpenTokenPurchase: () -> Unit = {}
+    onOpenTokenPurchase: () -> Unit = {},
+    onCopyGeneratedFile: (GeneratedFile) -> Unit = {}
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -192,7 +194,7 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         items(state.messages, key = { it.id }) { message ->
-                            MessageBubble(message)
+                            MessageBubble(message, onCopyGeneratedFile)
                         }
                         if (state.isRunning && state.runningTaskConversationId == state.activeConversationId) {
                             item {
@@ -333,7 +335,7 @@ private fun EmptyStateGreeting(userName: String?) {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, onCopyGeneratedFile: (GeneratedFile) -> Unit) {
     val isUser = message.role == ChatMessage.Role.USER
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -371,6 +373,34 @@ private fun MessageBubble(message: ChatMessage) {
             Spacer(Modifier.height(8.dp))
             SourceCardsRow(sources = message.webSources, modifier = Modifier.fillMaxWidth(0.92f))
         }
+        message.generatedFiles.forEach { file ->
+            Spacer(Modifier.height(8.dp))
+            GeneratedFileCard(file, onCopyGeneratedFile)
+        }
+    }
+}
+
+@Composable
+private fun GeneratedFileCard(file: GeneratedFile, onCopy: (GeneratedFile) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .background(CardBlack, RoundedCornerShape(12.dp))
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { onCopy(file) }
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.InsertDriveFile, contentDescription = null, tint = MutedWhite, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(file.name, color = PureWhite, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+            Text("Kopyalamak için dokun", color = MutedWhite, style = MaterialTheme.typography.bodySmall)
+        }
+        Icon(Icons.Filled.ContentCopy, contentDescription = "Dosyayı kopyala", tint = MutedWhite, modifier = Modifier.size(18.dp))
     }
 }
 

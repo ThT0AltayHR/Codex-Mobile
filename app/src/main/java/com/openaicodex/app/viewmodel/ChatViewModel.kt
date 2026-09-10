@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.openaicodex.app.data.ChatMessage
 import com.openaicodex.app.data.Conversation
 import com.openaicodex.app.data.ConversationRepository
+import com.openaicodex.app.data.GeneratedFile
 import com.openaicodex.app.data.ModelCatalog
 import com.openaicodex.app.data.SelectedModel
 import com.openaicodex.app.engine.CodexEvent
@@ -64,7 +65,6 @@ class ChatViewModel(
     private val repository: ConversationRepository,
     private val promptComposer: CodexPromptComposer,
     private val githubAuthManager: com.openaicodex.app.engine.GitHubAuthManager? = null,
-    private val downloadFileExporter: com.openaicodex.app.engine.DownloadFileExporter? = null,
     // Fix: a single shared SecretVault leaked every chat's secrets into
     // every other chat's process env (anything whose name appeared in the
     // prompt text would match, regardless of which conversation actually
@@ -109,6 +109,7 @@ class ChatViewModel(
     // turn, attached to the next assistant message that completes — never
     // fabricated, only ever populated from ThreadEvent.extractWebSearchUrl.
     private val collectedWebSourcesForCurrentTurn = mutableListOf<com.openaicodex.app.data.WebSource>()
+    private val collectedGeneratedFilesForCurrentTurn = mutableListOf<GeneratedFile>()
 
     init {
         refreshConversationList()
@@ -351,6 +352,7 @@ class ChatViewModel(
                 effort = modelSelection.effort.label
             )
             sawFatalErrorForCurrentTurn = false
+            collectedGeneratedFilesForCurrentTurn.clear()
 
             // Fix: a prior version injected EVERY vault secret into every
             // task's process environment. That's a real security bug —
@@ -454,7 +456,10 @@ class ChatViewModel(
                         val runtime = boundService?.runtime
                         if (runtime != null) {
                             val workspace = runtime.workspaceDir(convoId)
-                            downloadFileExporter?.export(workspace, path)
+                            val source = resolveGeneratedFile(workspace, path)
+                            if (source != null && collectedGeneratedFilesForCurrentTurn.none { it.path == source.absolutePath }) {
+                                collectedGeneratedFilesForCurrentTurn += GeneratedFile(source.name, source.absolutePath)
+                            }
                         }
                     }
                 }
@@ -493,8 +498,14 @@ class ChatViewModel(
                 // reply, so they render once beneath the actual answer
                 // rather than repeated under every code block.
                 webSources = if (index == segments.lastIndex) sourcesForThisReply else emptyList()
+                generatedFiles = if (index == segments.lastIndex) {
+                    collectedGeneratedFilesForCurrentTurn.toList()
+                } else {
+                    emptyList()
+                }
             )
         }
+        collectedGeneratedFilesForCurrentTurn.clear()
         viewModelScope.launch(Dispatchers.IO) {
             newMessages.forEach { repository.appendMessage(convoId, it) }
         }
@@ -542,5 +553,20 @@ class ChatViewModel(
     private fun normalizeTitle(raw: String): String {
         val collapsed = raw.replace(Regex("\\s+"), " ").trim()
         return collapsed.take(60).ifBlank { "Yeni sohbet" }
+    }
+
+    private fun resolveGeneratedFile(workspace: java.io.File, rawPath: String): java.io.File? {
+        return try {
+            val root = workspace.canonicalFile
+            val candidate = if (java.io.File(rawPath).isAbsolute) {
+                java.io.File(rawPath)
+            } else {
+                java.io.File(root, rawPath)
+            }.canonicalFile
+            val rootPrefix = root.path.trimEnd(java.io.File.separatorChar) + java.io.File.separator
+            if (candidate.path.startsWith(rootPrefix) && candidate.isFile && candidate.canRead()) candidate else null
+        } catch (_: Exception) {
+            null
+        }
     }
 }

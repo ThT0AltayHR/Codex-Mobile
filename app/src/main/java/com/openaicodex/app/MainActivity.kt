@@ -22,6 +22,7 @@ import com.openaicodex.app.engine.CodexAuthManager
 import com.openaicodex.app.engine.CodexNativeRuntime
 import com.openaicodex.app.engine.CodexProcessService
 import com.openaicodex.app.engine.CodexPromptComposer
+import com.openaicodex.app.data.GeneratedFile
 import com.openaicodex.app.ui.screens.*
 import com.openaicodex.app.ui.theme.CodexMobileTheme
 import com.openaicodex.app.viewmodel.ChatViewModel
@@ -30,6 +31,7 @@ import com.openaicodex.app.viewmodel.OnboardingViewModel
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FileInputStream
 import java.util.UUID
 
 private enum class Screen { ONBOARDING, CHAT, SETTINGS, PERSONALIZATION, MEMORY, LANGUAGE, STORAGE, GITHUB, SECRET_VAULT }
@@ -98,13 +100,7 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return ChatViewModel(
-                    repository,
-                    promptComposer,
-                    githubAuthManager,
-                    com.openaicodex.app.engine.DownloadFileExporter(applicationContext),
-                    ::secretVaultFor
-                ) as T
+                return ChatViewModel(repository, promptComposer, githubAuthManager, ::secretVaultFor) as T
             }
         }
     }
@@ -126,6 +122,21 @@ class MainActivity : ComponentActivity() {
 
         val filePickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
             if (uri != null) copyPickedFileIntoWorkspace(uri)
+        }
+        var pendingGeneratedFilePath: String? = null
+        val generatedFileCopyLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri: Uri? ->
+            val source = pendingGeneratedFilePath?.let(::File)
+            pendingGeneratedFilePath = null
+            if (uri != null && source != null) {
+                try {
+                    contentResolver.openOutputStream(uri)?.use { output ->
+                        FileInputStream(source).use { input -> input.copyTo(output) }
+                    } ?: throw java.io.IOException("Hedef dosya akışı açılamadı")
+                    android.widget.Toast.makeText(this, "Dosya kopyalandı", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (error: Exception) {
+                    android.widget.Toast.makeText(this, "Dosya kopyalanamadı: ${error.message ?: "bilinmeyen hata"}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
         }
 
         // Start the foreground service (survives independent of this
@@ -183,6 +194,10 @@ class MainActivity : ComponentActivity() {
                             val customTabsIntent = CustomTabsIntent.Builder().build()
                             customTabsIntent.launchUrl(this@MainActivity, Uri.parse("https://chatgpt.com/codex/settings/usage"))
                         },
+                         onCopyGeneratedFile = { file ->
+                             pendingGeneratedFilePath = file.path
+                             generatedFileCopyLauncher.launch(file.name)
+                         },
                         onDismissDeleteBlocked = { chatViewModel.dismissDeleteBlockedMessage() },
                         onOpenSettings = { screen = Screen.SETTINGS }
                     )
