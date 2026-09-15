@@ -32,7 +32,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
-private enum class Screen { ONBOARDING, CHAT, SETTINGS, PERSONALIZATION, MEMORY, LANGUAGE, STORAGE, GITHUB }
+private enum class Screen {
+    ONBOARDING, CHAT, SETTINGS, PERSONALIZATION, MEMORY, LANGUAGE, STORAGE, GITHUB,
+    APPEARANCE, SECRETS, ADVANCED, ABOUT
+}
 
 /**
  * Fix over a prior version: ChatViewModel no longer owns a
@@ -106,7 +109,7 @@ class MainActivity : ComponentActivity() {
         promptComposer = CodexPromptComposer(prefsStore, pathsHandle)
 
         val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
             notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
 
@@ -114,27 +117,41 @@ class MainActivity : ComponentActivity() {
             if (uri != null) copyPickedFileIntoWorkspace(uri)
         }
 
-        // Start the foreground service (survives independent of this
-        // Activity) AND bind to it (lets us observe its event flow / call
-        // methods while we're in the foreground).
-        val serviceIntent = Intent(this, CodexProcessService::class.java)
-        androidx.core.content.ContextCompat.startForegroundService(this, serviceIntent)
-        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+        Intent(this, CodexProcessService::class.java).also { intent ->
+            startService(intent)
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        }
 
         setContent {
             CodexMobileTheme {
-                var screen by remember { mutableStateOf(if (authManager.isLoggedIn()) Screen.CHAT else Screen.ONBOARDING) }
+                var screen by remember { mutableStateOf(Screen.ONBOARDING) }
                 val onboardingState by onboardingViewModel.state.collectAsState()
                 val chatState by chatViewModel.state.collectAsState()
+
+                val onboardingDone by prefsStore.onboardingDone.collectAsState(initial = false)
                 val userName by prefsStore.userName.collectAsState(initial = null)
                 val userBio by prefsStore.userBio.collectAsState(initial = null)
                 val tone by prefsStore.tone.collectAsState(initial = "balanced")
                 val customPrompt by prefsStore.customPrompt.collectAsState(initial = null)
                 val languageCode by prefsStore.languageCode.collectAsState(initial = null)
+                val textScale by prefsStore.textScale.collectAsState(initial = 1.0f)
+                val reduceMotion by prefsStore.reduceMotion.collectAsState(initial = false)
+                val hapticsEnabled by prefsStore.hapticsEnabled.collectAsState(initial = true)
+                val storedAuth = remember(chatState.serviceConnected, onboardingState.isLoggedIn) { authManager.loadStoredAuth() }
+                val githubConnected = remember(chatState.serviceConnected) { githubAuthManager.isConnected() }
+                var secretNames by remember { mutableStateOf(secretVault.listNames().toList()) }
+                var configTomlText by remember { mutableStateOf("") }
 
-                LaunchedEffect(onboardingState.stage) {
-                    if (onboardingState.stage == OnboardingStage.DONE) {
-                        screen = Screen.CHAT
+                LaunchedEffect(onboardingDone) {
+                    screen = if (onboardingDone) Screen.CHAT else Screen.ONBOARDING
+                }
+                LaunchedEffect(screen) {
+                    if (screen == Screen.ADVANCED) {
+                        val f = File(pathsHandle.codexHomeDir(), "config.toml")
+                        configTomlText = if (f.exists()) f.readText() else ""
+                    }
+                    if (screen == Screen.SECRETS) {
+                        secretNames = secretVault.listNames().toList()
                     }
                 }
 
@@ -142,11 +159,12 @@ class MainActivity : ComponentActivity() {
                     Screen.ONBOARDING -> OnboardingScreen(
                         state = onboardingState,
                         onLanguageSelected = { onboardingViewModel.selectLanguage(it) },
-                        onStartLogin = { launchLogin() },
-                        onNameSubmit = { onboardingViewModel.submitName(it) },
-                        onBioSubmit = { onboardingViewModel.submitBio(it) },
-                        onBioSkip = { onboardingViewModel.skipBio() }
+                        onLoginClicked = { launchLogin() },
+                        onNameSubmitted = { onboardingViewModel.submitName(it) },
+                        onBioSubmitted = { onboardingViewModel.submitBio(it) },
+                        onSkipBio = { onboardingViewModel.skipBio() }
                     )
+
                     Screen.CHAT -> ChatScreen(
                         state = chatState,
                         userName = userName,
@@ -162,69 +180,65 @@ class MainActivity : ComponentActivity() {
                         onStop = { chatViewModel.stopRunning() },
                         onDismissError = { chatViewModel.dismissError() },
                         onDismissDeleteBlocked = { chatViewModel.dismissDeleteBlockedMessage() },
-                        onOpenSettings = { screen = Screen.SETTINGS }
+                        onOpenSettings = { screen = Screen.SETTINGS },
+                        onToggleStepHistory = { chatViewModel.toggleStepHistoryExpanded() },
+                        listWorkspaceFiles = { chatViewModel.listWorkspaceFiles() },
+                        readWorkspaceFile = { chatViewModel.readWorkspaceFilePreview(it) }
                     )
+
                     Screen.SETTINGS -> SettingsScreen(
                         userName = userName ?: "",
-                        openAiEmail = authManager.loadStoredAuth()?.email,
-                        githubConnected = githubAuthManager.isConnected(),
+                        openAiEmail = storedAuth?.email,
+                        githubConnected = githubConnected,
                         onBack = { screen = Screen.CHAT },
                         onOpenPersonalization = { screen = Screen.PERSONALIZATION },
                         onOpenMemory = { screen = Screen.MEMORY },
                         onOpenLanguage = { screen = Screen.LANGUAGE },
                         onOpenStorage = { screen = Screen.STORAGE },
                         onOpenGitHub = { screen = Screen.GITHUB },
-                        onOpenNotifications = {
-                            val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
-                            startActivity(intent)
-                        },
+                        onOpenNotifications = { screen = Screen.CHAT },
+                        onOpenAppearance = { screen = Screen.APPEARANCE },
+                        onOpenSecrets = { screen = Screen.SECRETS },
+                        onOpenAdvanced = { screen = Screen.ADVANCED },
+                        onOpenAbout = { screen = Screen.ABOUT },
                         onLogout = {
                             authManager.logoutEverywhere(pathsHandle)
-                            // Reset OnboardingViewModel's in-memory stage
-                            // BEFORE switching Screen — otherwise its stale
-                            // DONE stage immediately bounces us back to
-                            // Chat via LaunchedEffect(onboardingState.stage),
-                            // making "Log out" appear to do nothing.
+                            githubAuthManager.disconnect()
                             onboardingViewModel.resetForLogout()
                             screen = Screen.ONBOARDING
                         }
                     )
+
                     Screen.PERSONALIZATION -> PersonalizationScreen(
                         currentTone = tone,
                         currentCustomPrompt = customPrompt ?: "",
                         onBack = { screen = Screen.SETTINGS },
-                        onToneSelected = { selectedTone ->
-                            lifecycleScope.launch { prefsStore.setTone(selectedTone) }
-                        },
-                        onCustomPromptSaved = { prompt ->
-                            lifecycleScope.launch { prefsStore.setCustomPrompt(prompt) }
-                        }
+                        onToneSelected = { lifecycleScope.launch { prefsStore.setTone(it) } },
+                        onCustomPromptSaved = { lifecycleScope.launch { prefsStore.setCustomPrompt(it) } }
                     )
+
                     Screen.MEMORY -> {
-                        var agentsMdPreview by remember { mutableStateOf("") }
-                        val activeConvoId = chatState.activeConversationId
-                        LaunchedEffect(screen, userName, userBio, activeConvoId) {
-                            val agentsFile = File(pathsHandle.workspaceDir(activeConvoId), "AGENTS.md")
-                            agentsMdPreview = if (agentsFile.exists()) agentsFile.readText() else ""
+                        var agentsPreview by remember { mutableStateOf("") }
+                        LaunchedEffect(chatState.activeConversationId) {
+                            val agentsFile = File(pathsHandle.workspaceDir(chatState.activeConversationId), "AGENTS.md")
+                            agentsPreview = if (agentsFile.exists()) agentsFile.readText() else ""
                         }
                         MemoryScreen(
                             currentName = userName ?: "",
                             currentBio = userBio ?: "",
-                            agentsMdPreview = agentsMdPreview,
+                            agentsMdPreview = agentsPreview,
                             onBack = { screen = Screen.SETTINGS },
                             onSave = { name, bio ->
                                 lifecycleScope.launch {
                                     prefsStore.setUserIdentity(name, bio)
-                                    promptComposer.syncAgentsMd(activeConvoId)
-                                    val agentsFile = File(pathsHandle.workspaceDir(activeConvoId), "AGENTS.md")
-                                    agentsMdPreview = if (agentsFile.exists()) agentsFile.readText() else ""
+                                    promptComposer.syncAgentsMd(chatState.activeConversationId)
                                 }
                             }
                         )
                     }
+
                     Screen.LANGUAGE -> LanguageSettingsScreen(
-                        currentLanguageCode = languageCode,
+                        currentLanguageCode = languageCode ?: "tr",
                         onBack = { screen = Screen.SETTINGS },
                         onLanguageSelected = { lang ->
                             lifecycleScope.launch {
@@ -234,12 +248,14 @@ class MainActivity : ComponentActivity() {
                             screen = Screen.SETTINGS
                         }
                     )
+
                     Screen.STORAGE -> StorageScreen(
                         workspaceDir = File(filesDir, "codex_workspace"),
                         codexHomeDir = pathsHandle.codexHomeDir(),
                         conversationsFile = File(filesDir, "conversations.json"),
                         onBack = { screen = Screen.SETTINGS }
                     )
+
                     Screen.GITHUB -> GitHubConnectorScreen(
                         githubAuthManager = githubAuthManager,
                         onBack = { screen = Screen.SETTINGS },
@@ -248,7 +264,123 @@ class MainActivity : ComponentActivity() {
                             customTabsIntent.launchUrl(this@MainActivity, Uri.parse(url))
                         }
                     )
+
+                    Screen.APPEARANCE -> AppearanceScreen(
+                        textScale = textScale,
+                        reduceMotion = reduceMotion,
+                        hapticsEnabled = hapticsEnabled,
+                        onBack = { screen = Screen.SETTINGS },
+                        onTextScaleChange = { lifecycleScope.launch { prefsStore.setTextScale(it) } },
+                        onReduceMotionChange = { lifecycleScope.launch { prefsStore.setReduceMotion(it) } },
+                        onHapticsChange = { lifecycleScope.launch { prefsStore.setHapticsEnabled(it) } }
+                    )
+
+                    Screen.SECRETS -> SecretsScreen(
+                        secretNames = secretNames,
+                        onBack = { screen = Screen.SETTINGS },
+                        onAdd = { name, value ->
+                            secretVault.set(name, value)
+                            secretNames = secretVault.listNames().toList()
+                        },
+                        onDelete = { name ->
+                            secretVault.delete(name)
+                            secretNames = secretVault.listNames().toList()
+                        }
+                    )
+
+                    Screen.ADVANCED -> AdvancedScreen(
+                        codexHomePath = pathsHandle.codexHomeDir().absolutePath,
+                        workspacePath = pathsHandle.workspaceDir(chatState.activeConversationId).absolutePath,
+                        isEngineRunning = chatState.isRunning,
+                        configTomlContent = configTomlText,
+                        onBack = { screen = Screen.SETTINGS },
+                        onStopEngine = { chatViewModel.stopRunning() }
+                    )
+
+                    Screen.ABOUT -> AboutScreen(
+                        versionName = remember {
+                            try { packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0" } catch (e: Exception) { "1.0" }
+                        },
+                        onBack = { screen = Screen.SETTINGS }
+                    )
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // No-op: OAuth completion arrives via the local callback server
+        // (CodexAuthManager.startCallbackServerAndAwaitCode), matching the
+        // real upstream redirect_uri — not via an app deep link.
+    }
+
+    private fun launchLogin() {
+        if (authManager.isLoginInFlight()) {
+            // Fix: a prior version silently returned here with zero UI
+            // feedback — if loginInFlight ever got stuck true (e.g. the
+            // Activity was reclaimed by the OS mid-login while a blocking
+            // socket.accept() call couldn't respond to cancellation), the
+            // login button would appear completely dead with no
+            // explanation. Now the user at least sees why, and
+            // isLoginInFlight() itself self-heals after a stale timeout
+            // (see CodexAuthManager) so this state can't persist forever.
+            onboardingViewModel.onLoginError("Zaten devam eden bir giriş denemesi var, birkaç saniye içinde tekrar deneyin")
+            return
+        }
+        onboardingViewModel.onLoginStarted()
+        lifecycleScope.launch {
+            val serverReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+            lifecycleScope.launch {
+                val result = authManager.startCallbackServerAndAwaitCode(onBound = { serverReady.complete(Unit) })
+                result.onSuccess { (code, state) ->
+                    val loginResult = authManager.completeLogin(code, state)
+                    loginResult.onSuccess {
+                        // writeAuthJsonForNativeRuntime now returns a Result: a prior
+                        // version called this and unconditionally reported success
+                        // right after, even if the write silently failed — which
+                        // meant the UI could show "logged in" while codex.bin's own
+                        // auth.json was missing or incomplete, so chat then failed
+                        // with no clear reason. Now a failed write is a visible,
+                        // specific error instead of a silent dead end.
+                        authManager.writeAuthJsonForNativeRuntime(pathsHandle)
+                            .onSuccess { onboardingViewModel.onLoginSuccess() }
+                            .onFailure { err ->
+                                onboardingViewModel.onLoginError("Giriş yapıldı ama yerel motora kaydedilemedi: ${err.message}")
+                            }
+                    }.onFailure {
+                        onboardingViewModel.onLoginError(it.message ?: "Giriş başarısız oldu")
+                    }
+                }.onFailure {
+                    onboardingViewModel.onLoginError(it.message ?: "Giriş zaman aşımına uğradı veya iptal edildi")
+                }
+            }
+            // Wait for the server to actually bind before opening the
+            // browser. Bounded with a timeout: if the callback server
+            // never binds (both ports genuinely unavailable — see the
+            // failure path above), this coroutine no longer waits
+            // forever with no user-visible outcome.
+            val bound = try {
+                kotlinx.coroutines.withTimeoutOrNull(5000) { serverReady.await() }
+            } catch (e: Exception) {
+                null
+            }
+            if (bound == null) {
+                onboardingViewModel.onLoginError("Giriş başlatılamadı (yerel bağlantı kurulamadı)")
+                return@launch
+            }
+            val url = authManager.buildAuthorizeUrl()
+            onboardingViewModel.setAuthUrl(url)
+            try {
+                val customTabsIntent = CustomTabsIntent.Builder().build()
+                customTabsIntent.launchUrl(this@MainActivity, Uri.parse(url))
+            } catch (e: Exception) {
+                // No browser available to handle the Custom Tab intent —
+                // a prior version let this throw uncaught, which could
+                // silently abort the whole login attempt with no
+                // explanation while the callback server kept waiting.
+                authManager.stopCallbackServer()
+                onboardingViewModel.onLoginError("Giriş sayfası açılamadı: cihazda bir tarayıcı bulunamadı")
             }
         }
     }
@@ -300,53 +432,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         return null
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // No-op: OAuth completion arrives via the local callback server
-        // (CodexAuthManager.startCallbackServerAndAwaitCode), matching the
-        // real upstream redirect_uri — not via an app deep link.
-    }
-
-    private fun launchLogin() {
-        if (authManager.isLoginInFlight()) return
-        onboardingViewModel.onLoginStarted()
-        lifecycleScope.launch {
-            val serverReady = kotlinx.coroutines.CompletableDeferred<Unit>()
-            lifecycleScope.launch {
-                val result = authManager.startCallbackServerAndAwaitCode(onBound = { serverReady.complete(Unit) })
-                result.onSuccess { (code, state) ->
-                    val loginResult = authManager.completeLogin(code, state)
-                    loginResult.onSuccess {
-                        authManager.writeAuthJsonForNativeRuntime(pathsHandle)
-                        onboardingViewModel.onLoginSuccess()
-                    }.onFailure {
-                        onboardingViewModel.onLoginError(it.message ?: "Giriş başarısız oldu")
-                    }
-                }.onFailure {
-                    onboardingViewModel.onLoginError(it.message ?: "Giriş zaman aşımına uğradı veya iptal edildi")
-                }
-            }
-            // Wait for the server to actually bind before opening the
-            // browser. Bounded with a timeout: if the callback server
-            // never binds (both ports genuinely unavailable — see the
-            // failure path above), this coroutine no longer waits
-            // forever with no user-visible outcome.
-            val bound = try {
-                kotlinx.coroutines.withTimeoutOrNull(5000) { serverReady.await() }
-            } catch (e: Exception) {
-                null
-            }
-            if (bound == null) {
-                onboardingViewModel.onLoginError("Giriş başlatılamadı (yerel bağlantı kurulamadı)")
-                return@launch
-            }
-            val url = authManager.buildAuthorizeUrl()
-            onboardingViewModel.setAuthUrl(url)
-            val customTabsIntent = CustomTabsIntent.Builder().build()
-            customTabsIntent.launchUrl(this@MainActivity, Uri.parse(url))
-        }
     }
 
     override fun onDestroy() {

@@ -7,9 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -43,7 +40,7 @@ fun LanguageSettingsScreen(
                 title = { Text("Dil", color = PureWhite, style = MaterialTheme.typography.titleLarge.copy(fontStyle = FontStyle.Italic)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Geri", tint = PureWhite)
+                        CodexIcon(CIcon.Back, tint = PureWhite, modifier = Modifier.size(20.dp))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = PureBlack)
@@ -55,7 +52,7 @@ fun LanguageSettingsScreen(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = { Text("Dil ara...") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedWhite) },
+                leadingIcon = { CodexIcon(CIcon.Search, tint = MutedWhite, modifier = Modifier.size(16.dp)) },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = PureWhite, unfocusedBorderColor = BorderGray,

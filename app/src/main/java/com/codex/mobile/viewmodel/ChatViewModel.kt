@@ -33,8 +33,16 @@ data class ChatUiState(
     val errorMessage: String? = null,
     val pendingAttachment: PendingAttachment? = null,
     val serviceConnected: Boolean = false,
-    val deleteBlockedMessage: String? = null
+    val deleteBlockedMessage: String? = null,
+    /** Real completed-step history for the currently running/most recent turn — only ever populated from actual Codex events (see handleStdoutLine). Shown in an expandable detail panel under the step strip. */
+    val stepHistory: List<com.codex.mobile.engine.SamuraiStepEntry> = emptyList(),
+    val stepHistoryExpanded: Boolean = false,
+    /** Raw stdout/stderr lines from the current/most recent turn's codex process — real process output only, capped at 400 lines. Backs the Shell tab in the tools panel. */
+    val shellLog: List<ShellLogLine> = emptyList()
 )
+
+data class ShellLogLine(val text: String, val isError: Boolean, val timestampMillis: Long = System.currentTimeMillis())
+data class WorkspaceEntry(val relativePath: String, val sizeBytes: Long, val modifiedMillis: Long)
 
 /**
  * Binds to CodexProcessService and drives everything through it, so the
@@ -273,7 +281,10 @@ class ChatViewModel(
                     inputText = "",
                     pendingAttachment = null,
                     currentStep = SamuraiStep.THINKING,
-                    errorMessage = null
+                    errorMessage = null,
+                    stepHistory = emptyList(),
+                    stepHistoryExpanded = false,
+                    shellLog = emptyList()
                 )
             }
             refreshConversationList()
@@ -323,8 +334,12 @@ class ChatViewModel(
     private fun handleServiceEvent(event: CodexEvent) {
         val convoId = _state.value.runningTaskConversationId ?: return
         when (event) {
-            is CodexEvent.Stdout -> handleStdoutLine(convoId, event.line)
+            is CodexEvent.Stdout -> {
+                appendShellLog(event.line, isError = false)
+                handleStdoutLine(convoId, event.line)
+            }
             is CodexEvent.Stderr -> {
+                appendShellLog(event.line, isError = true)
                 if (event.line.isNotBlank() && !sawFatalErrorForCurrentTurn) {
                     _state.value = _state.value.copy(errorMessage = event.line.take(500))
                 }
@@ -341,6 +356,46 @@ class ChatViewModel(
                 _state.value = _state.value.copy(currentStep = SamuraiStep.IDLE, errorMessage = event.message)
             }
         }
+    }
+
+    private fun appendShellLog(line: String, isError: Boolean) {
+        if (line.isBlank()) return
+        val updated = (_state.value.shellLog + ShellLogLine(line, isError)).takeLast(400)
+        _state.value = _state.value.copy(shellLog = updated)
+    }
+
+    /** Lists real files under this conversation's workspace directory — used by the Files tab. Never fabricated; a plain recursive directory walk. */
+    fun listWorkspaceFiles(): List<WorkspaceEntry> {
+        val convoId = _state.value.activeConversationId ?: return emptyList()
+        val root = service.runtime.workspaceDir(convoId)
+        if (!root.exists()) return emptyList()
+        return try {
+            root.walkTopDown()
+                .filter { it.isFile }
+                .take(500)
+                .map { f ->
+                    WorkspaceEntry(
+                        relativePath = f.relativeTo(root).path,
+                        sizeBytes = f.length(),
+                        modifiedMillis = f.lastModified()
+                    )
+                }
+                .sortedByDescending { it.modifiedMillis }
+                .toList()
+        } catch (e: Exception) { emptyList() }
+    }
+
+    /** Reads up to 40KB of a workspace file's text content for the preview sheet — real file content, truncated for safety, never summarized or altered. */
+    fun readWorkspaceFilePreview(relativePath: String): String {
+        val convoId = _state.value.activeConversationId ?: return ""
+        val root = service.runtime.workspaceDir(convoId)
+        val target = java.io.File(root, relativePath)
+        if (!target.exists() || !target.isFile) return ""
+        return try {
+            val bytes = target.readBytes()
+            val capped = if (bytes.size > 40_000) bytes.copyOfRange(0, 40_000) else bytes
+            String(capped, Charsets.UTF_8) + if (bytes.size > 40_000) "\n\n… (dosyanın geri kalanı kısaltıldı)" else ""
+        } catch (e: Exception) { "Dosya okunamadı: ${e.message}" }
     }
 
     private fun handleStdoutLine(convoId: String, line: String) {
@@ -374,6 +429,15 @@ class ChatViewModel(
                 }
             }
             is ThreadEvent.ItemCompleted -> {
+                // Real completed-step history entry — only ever built from
+                // this actual event's own JSON (see ThreadEvent.toEntry),
+                // never a fabricated file name/command. Skipped for
+                // agent_message itself since that's the reply text, not a
+                // "step".
+                if (parsed.itemType != "agent_message") {
+                    val entry = ThreadEvent.toEntry(parsed.itemType, parsed.raw)
+                    _state.value = _state.value.copy(stepHistory = _state.value.stepHistory + entry)
+                }
                 if (parsed.itemType == "web_search") {
                     val url = ThreadEvent.extractWebSearchUrl(parsed.raw)
                     if (url != null) {
@@ -422,6 +486,11 @@ class ChatViewModel(
     fun stopRunning() {
         boundService?.cancelTask()
         _state.value = _state.value.copy(currentStep = SamuraiStep.IDLE)
+    }
+
+    /** Toggles the expandable real step-history panel under the samurai step strip. */
+    fun toggleStepHistoryExpanded() {
+        _state.value = _state.value.copy(stepHistoryExpanded = !_state.value.stepHistoryExpanded)
     }
 
     private fun normalizeTitle(raw: String): String {

@@ -45,6 +45,10 @@ object CodexAuthConfig {
     const val SCOPES = "openid profile email offline_access api.connectors.read api.connectors.invoke"
     const val AUTHORIZE_PATH = "/oauth/authorize"
     const val TOKEN_PATH = "/oauth/token"
+    /** How long a login attempt can appear "in flight" before it's treated as stale/abandoned and cleared. */
+    const val STALE_LOGIN_TIMEOUT_MS = 6 * 60 * 1000L // slightly longer than the 5-minute callback socket timeout
+    /** Used only if the raw resource somehow fails to load — should never happen in a normal build. */
+    const val FALLBACK_SUCCESS_HTML = "<html><body><h2>Signed in to Codex</h2><p>You may now close this page.</p></body></html>"
 }
 
 data class PkcePair(val verifier: String, val challenge: String)
@@ -78,9 +82,27 @@ class CodexAuthManager(private val context: Context) {
     private var callbackServer: java.net.ServerSocket? = null
     private var boundPort: Int = CodexAuthConfig.DEFAULT_PORT
     @Volatile private var loginInFlight: Boolean = false
+    @Volatile private var loginStartedAtMillis: Long = 0L
 
-    /** True while a login attempt is already in progress — callers must not start a second one. */
-    fun isLoginInFlight(): Boolean = loginInFlight
+    /**
+     * True while a login attempt is already in progress. Includes a
+     * staleness check: if a prior attempt set this flag and then never
+     * reached its finally block within a generous window (e.g. because
+     * the hosting Activity was killed by the OS while a blocking
+     * socket.accept() call was in progress — coroutine cancellation
+     * cannot interrupt a blocking synchronous socket call), this no
+     * longer leaves the login button permanently, silently dead. After
+     * the staleness window, a new attempt is allowed to proceed and any
+     * leftover socket is force-closed first.
+     */
+    fun isLoginInFlight(): Boolean {
+        if (loginInFlight && System.currentTimeMillis() - loginStartedAtMillis > CodexAuthConfig.STALE_LOGIN_TIMEOUT_MS) {
+            try { callbackServer?.close() } catch (_: Exception) {}
+            callbackServer = null
+            loginInFlight = false
+        }
+        return loginInFlight
+    }
 
     fun generatePkce(): PkcePair {
         val bytes = ByteArray(64)
@@ -137,6 +159,7 @@ class CodexAuthManager(private val context: Context) {
             return@withContext Result.failure(RuntimeException("Zaten devam eden bir giriş denemesi var"))
         }
         loginInFlight = true
+        loginStartedAtMillis = System.currentTimeMillis()
         try {
             val loopback = java.net.InetAddress.getByName("127.0.0.1")
             val socket = try {
@@ -168,34 +191,50 @@ class CodexAuthManager(private val context: Context) {
             var state: String? = null
             var error: String? = null
 
-            // Loop accepting connections until we see one that is actually
-            // our expected callback path — stray connections are closed
-            // and ignored rather than being trusted.
+            // Mirrors the real upstream flow exactly (codex-rs/login/src/server.rs):
+            // the browser hits /auth/callback first; the server then
+            // issues an HTTP redirect to /success on the SAME local
+            // server, and only that second request serves the actual
+            // "Signed in to Codex" HTML page (codex-rs/login/src/assets/success_legacy.html,
+            // embedded verbatim as res/raw/codex_login_success.html). A
+            // prior version served ad-hoc placeholder text directly at
+            // /auth/callback, which is why it visually didn't match what
+            // real Codex CLI shows for the same login.
             while (true) {
                 val client = socket.accept()
                 val request = client.getInputStream().bufferedReader().readLine() ?: ""
                 val path = request.split(" ").getOrNull(1) ?: ""
-                val isRealCallback = path.startsWith("/auth/callback")
 
-                if (isRealCallback) {
-                    val uri = android.net.Uri.parse("http://localhost$path")
-                    code = uri.getQueryParameter("code")
-                    state = uri.getQueryParameter("state")
-                    error = uri.getQueryParameter("error")
+                when {
+                    path.startsWith("/auth/callback") -> {
+                        val uri = android.net.Uri.parse("http://localhost$path")
+                        code = uri.getQueryParameter("code")
+                        state = uri.getQueryParameter("state")
+                        error = uri.getQueryParameter("error")
+
+                        val redirectTarget = "http://localhost:$boundPort/success"
+                        val response = "HTTP/1.1 302 Found\r\nLocation: $redirectTarget\r\nContent-Length: 0\r\n\r\n"
+                        client.getOutputStream().write(response.toByteArray())
+                        client.getOutputStream().flush()
+                        client.close()
+                        // Keep looping — the browser will now request /success on this same socket.
+                    }
+                    path.startsWith("/success") -> {
+                        val successHtml = readRealSuccessHtml()
+                        val response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${successHtml.toByteArray(Charsets.UTF_8).size}\r\n\r\n$successHtml"
+                        client.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+                        client.getOutputStream().flush()
+                        client.close()
+                        break // login round-trip fully complete, matching real CLI's RedirectAndExit
+                    }
+                    else -> {
+                        val responseBody = "<html><body><h2>Not found</h2></body></html>"
+                        val response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: ${responseBody.toByteArray().size}\r\n\r\n$responseBody"
+                        client.getOutputStream().write(response.toByteArray())
+                        client.getOutputStream().flush()
+                        client.close()
+                    }
                 }
-
-                val responseBody = if (isRealCallback) {
-                    "<html><body><h2>Giriş tamamlandı, uygulamaya dönebilirsiniz.</h2></body></html>"
-                } else {
-                    "<html><body><h2>Not found</h2></body></html>"
-                }
-                val statusLine = if (isRealCallback) "HTTP/1.1 200 OK" else "HTTP/1.1 404 Not Found"
-                val response = "$statusLine\r\nContent-Type: text/html\r\nContent-Length: ${responseBody.toByteArray().size}\r\n\r\n$responseBody"
-                client.getOutputStream().write(response.toByteArray())
-                client.getOutputStream().flush()
-                client.close()
-
-                if (isRealCallback) break
             }
 
             socket.close()
@@ -218,6 +257,23 @@ class CodexAuthManager(private val context: Context) {
     fun stopCallbackServer() {
         try { callbackServer?.close() } catch (_: Exception) {}
         callbackServer = null
+    }
+
+    /**
+     * Reads the real Codex CLI success page verbatim from
+     * res/raw/codex_login_success.html, which is a direct copy of
+     * codex-rs/login/src/assets/success_legacy.html from the upstream
+     * source — "Signed in to Codex" / "You may now close this page",
+     * exactly what the real CLI shows, not an ad-hoc placeholder.
+     */
+    private fun readRealSuccessHtml(): String {
+        return try {
+            val resId = context.resources.getIdentifier("codex_login_success", "raw", context.packageName)
+            if (resId == 0) return CodexAuthConfig.FALLBACK_SUCCESS_HTML
+            context.resources.openRawResource(resId).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } catch (e: Exception) {
+            CodexAuthConfig.FALLBACK_SUCCESS_HTML
+        }
     }
 
     /** Builds the authorize URL to open in a Custom Tab / browser, mirroring build_authorize_url in server.rs. */
@@ -372,24 +428,44 @@ class CodexAuthManager(private val context: Context) {
      *    as the raw JWT string (Rust deserializes it into IdTokenInfo via
      *    a custom deserializer), not as a parsed object.
      */
-    fun writeAuthJsonForNativeRuntime(runtime: CodexNativeRuntime) {
-        val auth = loadStoredAuth() ?: return
-        val isoTimestamp = java.time.Instant.ofEpochMilli(auth.obtainedAtMillis)
-            .toString() // java.time.Instant#toString() is RFC3339/ISO-8601 with 'Z' suffix.
+    fun writeAuthJsonForNativeRuntime(runtime: CodexNativeRuntime): Result<Unit> {
+        return try {
+            val auth = loadStoredAuth()
+                ?: return Result.failure(RuntimeException("Yerel olarak kaydedilmiş kimlik bilgisi bulunamadı"))
+            if (auth.accessToken.isBlank()) {
+                return Result.failure(RuntimeException("access_token boş — token exchange tam tamamlanmamış olabilir"))
+            }
+            val isoTimestamp = java.time.Instant.ofEpochMilli(auth.obtainedAtMillis)
+                .toString() // java.time.Instant#toString() is RFC3339/ISO-8601 with 'Z' suffix.
 
-        val tokens = JSONObject().apply {
-            put("id_token", auth.idToken ?: JSONObject.NULL)
-            put("access_token", auth.accessToken)
-            put("refresh_token", auth.refreshToken ?: "")
-            put("account_id", auth.accountId ?: JSONObject.NULL)
+            val tokens = JSONObject().apply {
+                put("id_token", auth.idToken ?: JSONObject.NULL)
+                put("access_token", auth.accessToken)
+                put("refresh_token", auth.refreshToken ?: "")
+                put("account_id", auth.accountId ?: JSONObject.NULL)
+            }
+            val authJson = JSONObject().apply {
+                put("OPENAI_API_KEY", JSONObject.NULL)
+                put("tokens", tokens)
+                put("last_refresh", isoTimestamp)
+            }
+            val homeDir = runtime.codexHomeDir()
+            if (!homeDir.exists() && !homeDir.mkdirs()) {
+                return Result.failure(RuntimeException("CODEX_HOME dizini oluşturulamadı: ${homeDir.absolutePath}"))
+            }
+            val file = java.io.File(homeDir, "auth.json")
+            file.writeText(authJson.toString(2))
+            // Read back immediately to confirm what codex.bin will actually see —
+            // catches silent partial writes / storage issues right away instead
+            // of finding out only when the native process later fails to auth.
+            val verify = JSONObject(file.readText())
+            if (!verify.has("tokens") || verify.getJSONObject("tokens").optString("access_token").isBlank()) {
+                return Result.failure(RuntimeException("auth.json yazıldı ama doğrulanamadı (${file.absolutePath})"))
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("auth.json yazılamadı: ${e.message}", e))
         }
-        val authJson = JSONObject().apply {
-            put("OPENAI_API_KEY", JSONObject.NULL)
-            put("tokens", tokens)
-            put("last_refresh", isoTimestamp)
-        }
-        val file = java.io.File(runtime.codexHomeDir(), "auth.json")
-        file.writeText(authJson.toString(2))
     }
 
     /**

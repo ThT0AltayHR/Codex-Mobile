@@ -1,34 +1,47 @@
 package com.codex.mobile.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.codex.mobile.data.ChatMessage
 import com.codex.mobile.data.Conversation
-import com.codex.mobile.ui.components.CodeBlockCard
-import com.codex.mobile.ui.components.SamuraiStepStrip
-import com.codex.mobile.ui.components.SourceCardsRow
-import com.codex.mobile.ui.components.TextCopyButton
+import com.codex.mobile.engine.SamuraiStep
+import com.codex.mobile.ui.components.*
 import com.codex.mobile.ui.theme.*
 import com.codex.mobile.viewmodel.ChatUiState
-import com.codex.mobile.viewmodel.PendingAttachment
+import com.codex.mobile.viewmodel.WorkspaceEntry
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     state: ChatUiState,
@@ -45,126 +58,284 @@ fun ChatScreen(
     onStop: () -> Unit,
     onDismissError: () -> Unit,
     onDismissDeleteBlocked: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onToggleStepHistory: () -> Unit,
+    listWorkspaceFiles: () -> List<WorkspaceEntry> = { emptyList() },
+    readWorkspaceFile: (String) -> String = { "" }
 ) {
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    var toolsPanelOpen by remember { mutableStateOf(false) }
+    var pendingRename by remember { mutableStateOf<Conversation?>(null) }
+    var pendingDelete by remember { mutableStateOf<Conversation?>(null) }
     val listState = rememberLazyListState()
+    val keyboard = LocalSoftwareKeyboardController.current
 
-    // Auto-scroll fix: only jump to the newest message when the user is
-    // already near the bottom (or a brand new message count arrives while
-    // they haven't scrolled up to read history). If they've scrolled up
-    // to read earlier messages, a new assistant message no longer yanks
-    // them back down.
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isEmpty()) return@LaunchedEffect
-        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-        val totalItems = listState.layoutInfo.totalItemsCount
-        val wasNearBottom = totalItems == 0 || lastVisible >= totalItems - 2
-        if (wasNearBottom) {
-            listState.animateScrollToItem((state.messages.size - 1).coerceAtLeast(0))
-        }
+    LaunchedEffect(state.messages.size, state.currentStep) {
+        if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = NearBlack) {
-                ConversationHistoryDrawer(
+            ModalDrawerSheet(drawerContainerColor = NearBlack, drawerContentColor = OffWhite) {
+                ConversationDrawer(
                     conversations = state.conversations,
-                    onOpen = {
-                        onOpenConversation(it)
-                        scope.launch { drawerState.close() }
-                    },
-                    onNew = {
-                        onNewConversation()
-                        scope.launch { drawerState.close() }
-                    },
-                    onRename = onRename,
+                    activeId = state.activeConversationId,
+                    onOpen = { scope.launch { drawerState.close() }; onOpenConversation(it) },
+                    onNew = { scope.launch { drawerState.close() }; onNewConversation() },
                     onTogglePin = onTogglePin,
-                    onDelete = onDelete,
-                    onOpenSettings = {
-                        scope.launch { drawerState.close() }
-                        onOpenSettings()
-                    }
+                    onRequestRename = { pendingRename = it },
+                    onRequestDelete = { pendingDelete = it },
+                    onOpenSettings = { scope.launch { drawerState.close() }; onOpenSettings() },
+                    userName = userName
                 )
             }
         }
     ) {
-        Scaffold(
-            containerColor = PureBlack,
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Text(
-                            "Codex",
-                            style = MaterialTheme.typography.titleLarge.copy(fontStyle = FontStyle.Italic),
-                            color = PureWhite
-                        )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = "Geçmiş sohbetler", tint = PureWhite)
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Filled.Settings, contentDescription = "Ayarlar", tint = PureWhite)
-                        }
-                        IconButton(onClick = onNewConversation) {
-                            Icon(Icons.Filled.Add, contentDescription = "Yeni sohbet", tint = PureWhite)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = PureBlack)
+        Box(Modifier.fillMaxSize().background(PureBlack)) {
+            Column(Modifier.fillMaxSize()) {
+                ChatTopBar(
+                    title = state.conversations.find { it.id == state.activeConversationId }?.title ?: "Yeni sohbet",
+                    onMenu = { scope.launch { drawerState.open() } },
+                    onNew = onNewConversation,
+                    onTools = { toolsPanelOpen = true }
                 )
-            },
-            bottomBar = {
-                Column {
-                    state.pendingAttachment?.let {
-                        AttachmentPreviewBar(it, onClearAttachment)
-                    }
-                    ChatInputBar(
-                        text = state.inputText,
-                        onTextChange = onInputChange,
-                        onSend = { onSend(state.inputText) },
-                        onAttach = onAttachFile,
-                        isRunning = state.isRunning,
-                        onStop = onStop,
-                        // Fix: Send is enabled with text OR a pending
-                        // attachment — previously it required non-blank
-                        // text even when a file was already picked, so an
-                        // attachment-only message had no way to actually
-                        // be sent from the UI.
-                        canSend = state.inputText.isNotBlank() || state.pendingAttachment != null
-                    )
-                }
-            }
-        ) { padding ->
-            Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-                state.errorMessage?.let { error ->
-                    ErrorBanner(error, onDismissError)
-                }
-                state.deleteBlockedMessage?.let { msg ->
-                    ErrorBanner(msg, onDismissDeleteBlocked)
-                }
-                if (state.messages.isEmpty()) {
-                    EmptyStateGreeting(userName)
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(state.messages, key = { it.id }) { message ->
-                            MessageBubble(message)
-                        }
-                        if (state.isRunning && state.runningTaskConversationId == state.activeConversationId) {
-                            item {
-                                SamuraiStepStrip(step = state.currentStep, isActive = state.isRunning)
+
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures { change, dragAmount ->
+                                if (dragAmount < -14) toolsPanelOpen = true
+                                if (dragAmount > 14) toolsPanelOpen = false
+                                change.consume()
                             }
                         }
+                ) {
+                    if (state.messages.isEmpty()) {
+                        EmptyChatState(userName)
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(horizontal = Dimens.lg, vertical = Dimens.md),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(state.messages, key = { it.id }) { message ->
+                                MessageBubble(message)
+                            }
+                            if (state.currentStep != SamuraiStep.IDLE) {
+                                item(key = "step-strip") {
+                                    SamuraiStepStrip(
+                                        currentStep = state.currentStep,
+                                        stepHistory = state.stepHistory,
+                                        expanded = state.stepHistoryExpanded,
+                                        onToggleExpanded = onToggleStepHistory,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                            }
+                            item(key = "bottom-spacer") { Spacer(Modifier.height(4.dp)) }
+                        }
                     }
+                }
+
+                AnimatedVisibility(
+                    visible = state.errorMessage != null,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 })
+                ) {
+                    ErrorBanner(state.errorMessage ?: "", onDismissError)
+                }
+
+                AnimatedVisibility(visible = state.pendingAttachment != null) {
+                    state.pendingAttachment?.let { attachment ->
+                        AttachmentChip(attachment.fileName, onClearAttachment)
+                    }
+                }
+
+                ChatInputBar(
+                    text = state.inputText,
+                    isRunning = state.isRunning,
+                    onTextChange = onInputChange,
+                    onAttach = onAttachFile,
+                    onSend = {
+                        if (state.inputText.isNotBlank() || state.pendingAttachment != null) {
+                            keyboard?.hide()
+                            onSend(state.inputText)
+                        }
+                    },
+                    onStop = onStop
+                )
+            }
+
+            ToolsPanelOverlay(
+                visible = toolsPanelOpen,
+                onDismiss = { toolsPanelOpen = false },
+                stepHistory = state.stepHistory,
+                shellLog = state.shellLog,
+                listFiles = listWorkspaceFiles,
+                readFile = readWorkspaceFile
+            )
+        }
+    }
+
+    pendingRename?.let { convo ->
+        var text by remember(convo.id) { mutableStateOf(convo.title) }
+        AlertDialog(
+            onDismissRequest = { pendingRename = null },
+            containerColor = CardBlack,
+            title = { Text("Sohbeti yeniden adlandır", color = OffWhite, fontFamily = BodyFamily, fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = OffWhite, unfocusedTextColor = OffWhite,
+                        focusedBorderColor = OffWhite, unfocusedBorderColor = BorderGray,
+                        cursorColor = OffWhite
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(convo.id, text); pendingRename = null }) {
+                    Text("Kaydet", color = OffWhite, fontFamily = BodyFamily, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingRename = null }) { Text("Vazgeç", color = FaintWhite, fontFamily = BodyFamily) } }
+        )
+    }
+
+    pendingDelete?.let { convo ->
+        ConfirmDialog(
+            title = "Sohbeti sil",
+            message = "\"${convo.title}\" kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+            confirmLabel = "Sil",
+            onConfirm = { onDelete(convo.id) },
+            onDismiss = { pendingDelete = null }
+        )
+    }
+
+    if (state.deleteBlockedMessage != null) {
+        AlertDialog(
+            onDismissRequest = onDismissDeleteBlocked,
+            containerColor = CardBlack,
+            title = { Text("Silinemedi", color = OffWhite, fontFamily = BodyFamily, fontWeight = FontWeight.SemiBold) },
+            text = { Text(state.deleteBlockedMessage, color = MutedWhite, fontFamily = BodyFamily, fontSize = 13.5.sp) },
+            confirmButton = { TextButton(onClick = onDismissDeleteBlocked) { Text("Tamam", color = OffWhite, fontFamily = BodyFamily) } }
+        )
+    }
+}
+
+@Composable
+private fun ChatTopBar(title: String, onMenu: () -> Unit, onNew: () -> Unit, onTools: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onMenu) { CodexIcon(CIcon.Menu, tint = OffWhite, modifier = Modifier.size(20.dp)) }
+        Column(Modifier.weight(1f).padding(horizontal = 2.dp)) {
+            Text(
+                "Codex",
+                color = OffWhite,
+                fontFamily = DisplayItalicFamily,
+                fontStyle = FontStyle.Italic,
+                fontWeight = FontWeight.Medium,
+                fontSize = 18.sp
+            )
+            Text(title, color = FaintWhite, fontFamily = BodyFamily, fontSize = 11.5.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onTools) { CodexIcon(CIcon.PanelRight, tint = OffWhite, modifier = Modifier.size(19.dp)) }
+        IconButton(onClick = onNew) { CodexIcon(CIcon.Add, tint = OffWhite, modifier = Modifier.size(20.dp)) }
+    }
+}
+
+@Composable
+private fun EmptyChatState(userName: String?) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(Dimens.xl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            Modifier.size(64.dp).clip(RoundedCornerShape(Dimens.radiusLg)).background(PanelBlack).border(BorderStroke(1.dp, BorderGray), RoundedCornerShape(Dimens.radiusLg)),
+            contentAlignment = Alignment.Center
+        ) { CodexIcon(CIcon.CodeBrackets, tint = OffWhite, modifier = Modifier.size(28.dp)) }
+        Spacer(Modifier.height(Dimens.lg))
+        Text(
+            if (userName.isNullOrBlank()) "Bugün ne üzerinde çalışalım?" else "Merhaba $userName, ne üzerinde çalışalım?",
+            color = OffWhite,
+            fontFamily = BodyFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Bir görev yazın, bir dosya ekleyin ya da bir depoyu bağlayın.",
+            color = FaintWhite,
+            fontFamily = BodyFamily,
+            fontSize = 13.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun MessageBubble(message: ChatMessage) {
+    when (message.role) {
+        ChatMessage.Role.SYSTEM_STEP -> {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    message.content,
+                    color = FaintWhite,
+                    fontFamily = BodyFamily,
+                    fontSize = 11.5.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(PanelBlack)
+                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                )
+            }
+        }
+        ChatMessage.Role.USER -> {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 300.dp)
+                        .clip(RoundedCornerShape(Dimens.radiusLg).let { androidx.compose.foundation.shape.RoundedCornerShape(topStart = Dimens.radiusLg, topEnd = Dimens.radiusLg, bottomStart = Dimens.radiusLg, bottomEnd = 4.dp) })
+                        .background(OffWhite)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    if (message.attachedFileName != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 5.dp)) {
+                            CodexIcon(CIcon.FileGeneric, tint = PureBlack, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(message.attachedFileName, color = PureBlack, fontFamily = BodyFamily, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    if (message.content.isNotBlank()) {
+                        Text(message.content, color = PureBlack, fontFamily = BodyFamily, fontSize = 15.sp, lineHeight = 21.sp)
+                    }
+                }
+            }
+        }
+        ChatMessage.Role.ASSISTANT -> {
+            Column(Modifier.fillMaxWidth()) {
+                if (message.isCodeBlock) {
+                    CodeBlockCard(code = message.content, language = message.language)
+                } else if (message.content.isNotBlank()) {
+                    MarkdownText(message.content, modifier = Modifier.fillMaxWidth())
+                }
+                if (message.webSources.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    SourceCardsRow(message.webSources)
                 }
             }
         }
@@ -176,306 +347,187 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(ErrorRed.copy(alpha = 0.15f))
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = Dimens.lg, vertical = 6.dp)
+            .clip(RoundedCornerShape(Dimens.radiusMd))
+            .background(ErrorRed.copy(alpha = 0.12f))
+            .border(BorderStroke(1.dp, ErrorRed.copy(alpha = 0.35f)), RoundedCornerShape(Dimens.radiusMd))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.ErrorOutline, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(message, color = OffWhite, style = MaterialTheme.typography.bodyMedium, maxLines = 3)
-        }
-        IconButton(onClick = onDismiss) {
-            Icon(Icons.Filled.Close, contentDescription = "Kapat", tint = MutedWhite, modifier = Modifier.size(18.dp))
-        }
+        CodexIcon(CIcon.Warning, tint = ErrorRed, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(9.dp))
+        Text(message, color = ErrorRed, fontFamily = BodyFamily, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f))
+        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { CodexIcon(CIcon.Close, tint = ErrorRed, modifier = Modifier.size(13.dp)) }
     }
 }
 
 @Composable
-private fun AttachmentPreviewBar(attachment: PendingAttachment, onClear: () -> Unit) {
+private fun AttachmentChip(fileName: String, onClear: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(horizontal = Dimens.lg, vertical = 4.dp)
+            .clip(RoundedCornerShape(Dimens.radiusSm))
+            .background(PanelBlack)
+            .border(BorderStroke(1.dp, BorderGray), RoundedCornerShape(Dimens.radiusSm))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CodexIcon(CIcon.Attach, tint = MutedWhite, modifier = Modifier.size(13.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(fileName, color = MutedWhite, fontFamily = BodyFamily, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier.size(16.dp).clip(RoundedCornerShape(50)).background(BorderGray).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onClear),
+            contentAlignment = Alignment.Center
+        ) { CodexIcon(CIcon.Close, tint = OffWhite, modifier = Modifier.size(9.dp)) }
+    }
+}
+
+@Composable
+private fun ChatInputBar(text: String, isRunning: Boolean, onTextChange: (String) -> Unit, onAttach: () -> Unit, onSend: () -> Unit, onStop: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CardBlack)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .navigationBarsPadding()
+            .padding(horizontal = Dimens.lg, vertical = Dimens.sm),
+        verticalAlignment = Alignment.Bottom
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(iconForFileName(attachment.fileName), contentDescription = null, tint = MutedWhite, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(attachment.fileName, color = OffWhite, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-        }
-        IconButton(onClick = onClear) {
-            Icon(Icons.Filled.Close, contentDescription = "Eki kaldır", tint = MutedWhite, modifier = Modifier.size(16.dp))
-        }
-    }
-}
-
-@Composable
-private fun EmptyStateGreeting(userName: String?) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = if (!userName.isNullOrBlank()) "Merhaba, $userName" else "Merhaba",
-            style = MaterialTheme.typography.displayMedium.copy(fontStyle = FontStyle.Italic),
-            color = PureWhite
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Bugün ne üzerinde çalışalım?",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MutedWhite
-        )
-    }
-}
-
-@Composable
-private fun MessageBubble(message: ChatMessage) {
-    val isUser = message.role == ChatMessage.Role.USER
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
-    ) {
-        if (message.attachedFileName != null) {
-            AttachedFileChip(message.attachedFileName)
-            Spacer(Modifier.height(6.dp))
-        }
-        if (message.isCodeBlock) {
-            CodeBlockCard(code = message.content, language = message.language, modifier = Modifier.fillMaxWidth(0.92f))
-        } else if (message.content.isNotBlank()) {
-            Row(verticalAlignment = Alignment.Top) {
-                Box(
-                    modifier = Modifier
-                        .background(
-                            if (isUser) CardBlack else PanelBlack,
-                            RoundedCornerShape(16.dp)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .fillMaxWidth(if (isUser) 0.85f else 0.92f)
-                ) {
-                    Text(
-                        text = message.content,
-                        color = if (isUser) OffWhite else PureWhite,
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-                if (!isUser) {
-                    TextCopyButton(text = message.content, modifier = Modifier.size(36.dp))
-                }
+        Box(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(Dimens.radiusXl))
+                .background(PanelBlack)
+                .border(BorderStroke(1.dp, BorderGray), RoundedCornerShape(Dimens.radiusXl))
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp)) {
+                IconButton(onClick = onAttach) { CodexIcon(CIcon.Attach, tint = FaintWhite, modifier = Modifier.size(18.dp)) }
+                TextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Codex'e bir görev yaz…", color = FaintWhite, fontFamily = BodyFamily, fontSize = 14.5.sp) },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        disabledContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        cursorColor = OffWhite,
+                        focusedTextColor = OffWhite,
+                        unfocusedTextColor = OffWhite
+                    ),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontFamily = BodyFamily, fontSize = 14.5.sp),
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { onSend() })
+                )
             }
         }
-        if (message.webSources.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            SourceCardsRow(sources = message.webSources, modifier = Modifier.fillMaxWidth(0.92f))
+        Spacer(Modifier.width(8.dp))
+        val interactionSource = remember { MutableInteractionSource() }
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (isRunning) ErrorRed else OffWhite)
+                .pressableScale(interactionSource)
+                .clickable(interactionSource = interactionSource, indication = null, onClick = if (isRunning) onStop else onSend),
+            contentAlignment = Alignment.Center
+        ) {
+            CodexIcon(if (isRunning) CIcon.Stop else CIcon.Send, tint = if (isRunning) PureWhite else PureBlack, modifier = Modifier.size(19.dp))
         }
     }
 }
 
 @Composable
-private fun AttachedFileChip(fileName: String) {
-    val icon = iconForFileName(fileName)
-    Row(
-        modifier = Modifier
-            .background(CardBlack, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(icon, contentDescription = null, tint = MutedWhite, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(fileName, color = MutedWhite, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-/** Maps a real file extension to a representative icon — no fake/generic icon regardless of actual type. */
-private fun iconForFileName(fileName: String): androidx.compose.ui.graphics.vector.ImageVector {
-    val ext = fileName.substringAfterLast('.', "").lowercase()
-    return when (ext) {
-        "zip", "rar", "7z", "tar", "gz" -> Icons.Filled.FolderZip
-        "pdf" -> Icons.Filled.PictureAsPdf
-        "png", "jpg", "jpeg", "webp", "gif" -> Icons.Filled.Image
-        "kt", "java", "py", "js", "ts", "c", "cpp", "rs", "go" -> Icons.Filled.Code
-        "json", "xml", "yml", "yaml", "toml" -> Icons.Filled.DataObject
-        "txt", "md" -> Icons.Filled.Description
-        else -> Icons.Filled.InsertDriveFile
-    }
-}
-
-@Composable
-private fun ChatInputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onAttach: () -> Unit,
-    isRunning: Boolean,
-    onStop: () -> Unit,
-    canSend: Boolean
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(PureBlack)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onAttach, enabled = !isRunning) {
-            Icon(Icons.Filled.AttachFile, contentDescription = "Dosya ekle", tint = if (isRunning) GhostWhite else MutedWhite)
-        }
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Codex'e bir şey sor...", color = FaintWhite) },
-            enabled = !isRunning,
-            shape = RoundedCornerShape(24.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PureWhite,
-                unfocusedBorderColor = BorderGray,
-                focusedTextColor = PureWhite,
-                unfocusedTextColor = OffWhite,
-                cursorColor = PureWhite
-            ),
-            maxLines = 5
-        )
-        Spacer(Modifier.width(6.dp))
-        if (isRunning) {
-            IconButton(onClick = onStop) {
-                Icon(Icons.Filled.Stop, contentDescription = "Durdur", tint = ErrorRed)
-            }
-        } else {
-            IconButton(onClick = onSend, enabled = canSend) {
-                Icon(Icons.Filled.Send, contentDescription = "Gönder", tint = if (canSend) PureWhite else FaintWhite)
-            }
-        }
-    }
-}
-
-@Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun ConversationHistoryDrawer(
+private fun ConversationDrawer(
     conversations: List<Conversation>,
+    activeId: String?,
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
-    onRename: (String, String) -> Unit,
     onTogglePin: (String) -> Unit,
-    onDelete: (String) -> Unit,
-    onOpenSettings: () -> Unit
+    onRequestRename: (Conversation) -> Unit,
+    onRequestDelete: (Conversation) -> Unit,
+    onOpenSettings: () -> Unit,
+    userName: String?
 ) {
-    var renameTargetId by remember { mutableStateOf<String?>(null) }
-    var renameText by remember { mutableStateOf("") }
-
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Sohbetler",
-                style = MaterialTheme.typography.titleLarge.copy(fontStyle = FontStyle.Italic),
-                color = PureWhite
-            )
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "Ayarlar", tint = MutedWhite)
-            }
+    Column(Modifier.fillMaxHeight().width(300.dp)) {
+        Column(Modifier.statusBarsPadding().padding(Dimens.lg)) {
+            Text("Codex", color = OffWhite, fontFamily = DisplayItalicFamily, fontStyle = FontStyle.Italic, fontSize = 20.sp)
+            Spacer(Modifier.height(Dimens.md))
+            PrimaryButton(text = "Yeni sohbet", leadingIcon = CIcon.Add, onClick = onNew)
         }
-        Spacer(Modifier.height(12.dp))
-        TextButton(onClick = onNew) {
-            Icon(Icons.Filled.Add, contentDescription = null, tint = PureWhite)
-            Spacer(Modifier.width(6.dp))
-            Text("Yeni sohbet", color = PureWhite)
-        }
-        Spacer(Modifier.height(8.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(conversations, key = { it.id }) { convo ->
-                var expanded by remember { mutableStateOf(false) }
-                Box {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(PanelBlack, RoundedCornerShape(10.dp))
-                            .combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { onOpen(convo.id) },
-                                onLongClick = { expanded = true }
-                            )
-                            .padding(horizontal = 12.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            if (convo.pinned) {
-                                Icon(Icons.Filled.PushPin, contentDescription = null, tint = MutedWhite, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(
-                                convo.title,
-                                color = OffWhite,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Yeniden adlandır") },
-                            onClick = {
-                                renameTargetId = convo.id
-                                renameText = convo.title
-                                expanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (convo.pinned) "Sabitlemeyi kaldır" else "Sabitle") },
-                            leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
-                            onClick = {
-                                onTogglePin(convo.id)
-                                expanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Sil") },
-                            leadingIcon = { Icon(Icons.Filled.DeleteOutline, contentDescription = null) },
-                            onClick = {
-                                onDelete(convo.id)
-                                expanded = false
-                            }
-                        )
-                    }
+        val pinned = conversations.filter { it.pinned }
+        val others = conversations.filterNot { it.pinned }
+        LazyColumn(Modifier.weight(1f)) {
+            if (pinned.isNotEmpty()) {
+                item { SectionLabel("Sabitlenmiş") }
+                items(pinned, key = { "p-" + it.id }) { convo ->
+                    ConversationRow(convo, convo.id == activeId, onOpen, onTogglePin, onRequestRename, onRequestDelete)
                 }
-                Spacer(Modifier.height(4.dp))
+            }
+            item { SectionLabel("Sohbetler") }
+            if (others.isEmpty() && pinned.isEmpty()) {
+                item {
+                    Text("Henüz sohbet yok", color = FaintWhite, fontFamily = BodyFamily, fontSize = 12.5.sp, modifier = Modifier.padding(horizontal = Dimens.lg, vertical = 8.dp))
+                }
+            }
+            items(others, key = { "o-" + it.id }) { convo ->
+                ConversationRow(convo, convo.id == activeId, onOpen, onTogglePin, onRequestRename, onRequestDelete)
+            }
+            item { Spacer(Modifier.height(8.dp)) }
+        }
+        RowDivider()
+        SettingsRow(
+            icon = CIcon.Person,
+            title = userName?.takeIf { it.isNotBlank() } ?: "Profil ve ayarlar",
+            subtitle = "Ayarları aç",
+            onClick = onOpenSettings
+        )
+        Spacer(Modifier.navigationBarsPadding().height(4.dp))
+    }
+}
+
+@Composable
+private fun ConversationRow(
+    convo: Conversation,
+    isActive: Boolean,
+    onOpen: (String) -> Unit,
+    onTogglePin: (String) -> Unit,
+    onRequestRename: (Conversation) -> Unit,
+    onRequestDelete: (Conversation) -> Unit
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Dimens.radiusSm))
+            .background(if (isActive) PanelBlack else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onOpen(convo.id) }
+            .padding(horizontal = Dimens.lg, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CodexIcon(if (convo.pinned) CIcon.Pin else CIcon.CodeBrackets, tint = if (isActive) OffWhite else FaintWhite, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            convo.title,
+            color = if (isActive) OffWhite else MutedWhite,
+            fontFamily = BodyFamily,
+            fontSize = 13.5.sp,
+            fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Box {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
+                CodexIcon(CIcon.More, tint = FaintWhite, modifier = Modifier.size(14.dp))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, containerColor = CardBlack) {
+                DropdownMenuItem(text = { Text(if (convo.pinned) "Sabitlemeyi kaldır" else "Sabitle", color = OffWhite, fontFamily = BodyFamily) }, onClick = { menuOpen = false; onTogglePin(convo.id) })
+                DropdownMenuItem(text = { Text("Yeniden adlandır", color = OffWhite, fontFamily = BodyFamily) }, onClick = { menuOpen = false; onRequestRename(convo) })
+                DropdownMenuItem(text = { Text("Sil", color = ErrorRed, fontFamily = BodyFamily) }, onClick = { menuOpen = false; onRequestDelete(convo) })
             }
         }
-    }
-
-    renameTargetId?.let { targetId ->
-        AlertDialog(
-            onDismissRequest = { renameTargetId = null },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (renameText.isNotBlank()) {
-                            onRename(targetId, renameText)
-                            renameTargetId = null
-                        }
-                    },
-                    // Fix: rename accepted an empty title before — now
-                    // disabled rather than silently saving a blank name.
-                    enabled = renameText.isNotBlank()
-                ) { Text("Kaydet") }
-            },
-            dismissButton = {
-                TextButton(onClick = { renameTargetId = null }) { Text("İptal") }
-            },
-            title = { Text("Sohbeti yeniden adlandır") },
-            text = {
-                OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true)
-            }
-        )
     }
 }

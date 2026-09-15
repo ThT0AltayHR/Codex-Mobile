@@ -1,104 +1,97 @@
 package com.codex.mobile.ui.components
 
-import androidx.browser.customtabs.CustomTabsIntent
+/**
+ * Real web-search source cards shown under an assistant message, whenever
+ * that turn actually issued a web_search item (see ThreadEvent.ItemCompleted
+ * handling in ChatViewModel — sources are only ever added from a real
+ * web_search event's own URL, never guessed).
+ */
+
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.codex.mobile.data.WebSource
-import com.codex.mobile.ui.theme.CardBlack
-import com.codex.mobile.ui.theme.FaintWhite
-import com.codex.mobile.ui.theme.MutedWhite
+import com.codex.mobile.ui.theme.*
 
-/**
- * Renders real web sources Codex actually visited during a turn — sourced
- * only from ThreadEvent.extractWebSearchUrl, never fabricated. Each card
- * shows a real favicon fetched only from the source's own domain (via a
- * favicon-resolution endpoint that receives just the domain string, not
- * user data), falling back to a neutral custom vector globe icon — never
- * a fabricated logo — if none loads. Tapping a card opens it in a Custom
- * Tab, never a raw WebView.
- */
 @Composable
 fun SourceCardsRow(sources: List<WebSource>, modifier: Modifier = Modifier) {
     if (sources.isEmpty()) return
     val context = LocalContext.current
 
-    Column(modifier = modifier) {
-        Text("Kaynaklar", color = FaintWhite, style = MaterialTheme.typography.labelSmall)
-        Spacer(Modifier.height(6.dp))
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
+            CodexIcon(CIcon.Globe, tint = FaintWhite, modifier = Modifier.size(12.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(
+                "${sources.size} kaynak",
+                color = FaintWhite,
+                fontFamily = BodyFamily,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(sources, key = { it.url }) { source ->
-                SourceCard(source) {
-                    val customTabsIntent = CustomTabsIntent.Builder().build()
-                    customTabsIntent.launchUrl(context, android.net.Uri.parse(source.url))
+            items(sources) { source ->
+                val interactionSource = remember { MutableInteractionSource() }
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 190.dp)
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .background(PanelBlack)
+                        .border(BorderStroke(1.dp, BorderGray), RoundedCornerShape(Dimens.radiusSm))
+                        .pressableScale(interactionSource)
+                        .clickable(interactionSource = interactionSource, indication = null) {
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source.url)))
+                            } catch (_: Exception) { /* no browser available — silently ignore */ }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(18.dp).clip(RoundedCornerShape(5.dp)).background(CardBlack),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = "https://www.google.com/s2/favicons?domain=${source.domain}&sz=64",
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(7.dp))
+                    Column {
+                        Text(
+                            source.domain,
+                            color = OffWhite,
+                            fontFamily = BodyFamily,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    CodexIcon(CIcon.ExternalLink, tint = GhostWhite, modifier = Modifier.size(11.dp))
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SourceCard(source: WebSource, onClick: () -> Unit) {
-    val context = LocalContext.current
-    Row(
-        modifier = Modifier
-            .background(CardBlack, RoundedCornerShape(10.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .widthIn(max = 200.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Real favicon for this exact domain, requested from a
-        // favicon-resolution endpoint that only ever receives the plain
-        // domain string extracted from the real source URL — never any
-        // user content. On failure to load, Coil's error slot below falls
-        // back to a neutral vector globe, never a fabricated brand logo.
-        val faviconUrl = "https://www.google.com/s2/favicons?sz=64&domain=${source.domain}"
-        var loadFailed by remember(source.domain) { mutableStateOf(false) }
-        if (loadFailed) {
-            Icon(Icons.Filled.Language, contentDescription = null, tint = MutedWhite, modifier = Modifier.size(14.dp))
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(context).data(faviconUrl).crossfade(true).build(),
-                contentDescription = null,
-                modifier = Modifier.size(14.dp).clip(CircleShape),
-                contentScale = ContentScale.Crop,
-                onError = { loadFailed = true }
-            )
-        }
-        Spacer(Modifier.width(6.dp))
-        Text(
-            source.domain,
-            color = MutedWhite,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1
-        )
     }
 }

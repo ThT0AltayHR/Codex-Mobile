@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -11,10 +12,11 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore by preferencesDataStore(name = "codex_prefs")
 
 /**
- * Stores onboarding state (language, user's name, self-description) and
- * personalization settings (tone). This is the "never forgets" persistent
- * memory the user asked for: it survives app restarts and is threaded back
- * into every conversation as system context (see CodexPromptComposer).
+ * Stores onboarding state (language, user's name, self-description),
+ * personalization settings (tone) and appearance preferences (text scale,
+ * motion, haptics). This is the "never forgets" persistent memory the user
+ * asked for: it survives app restarts and is threaded back into every
+ * conversation as system context (see CodexPromptComposer).
  */
 class UserPreferencesStore(private val context: Context) {
 
@@ -26,6 +28,9 @@ class UserPreferencesStore(private val context: Context) {
         val TONE = stringPreferencesKey("assistant_tone")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_system_prompt")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        val TEXT_SCALE = floatPreferencesKey("text_scale")
+        val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
+        val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
     }
 
     val languageCode: Flow<String?> = context.dataStore.data.map { it[Keys.LANGUAGE_CODE] }
@@ -35,6 +40,9 @@ class UserPreferencesStore(private val context: Context) {
     val tone: Flow<String> = context.dataStore.data.map { it[Keys.TONE] ?: "balanced" }
     val customPrompt: Flow<String?> = context.dataStore.data.map { it[Keys.CUSTOM_PROMPT] }
     val onboardingDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.ONBOARDING_DONE] ?: false }
+    val textScale: Flow<Float> = context.dataStore.data.map { it[Keys.TEXT_SCALE] ?: 1.0f }
+    val reduceMotion: Flow<Boolean> = context.dataStore.data.map { it[Keys.REDUCE_MOTION] ?: false }
+    val hapticsEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.HAPTICS_ENABLED] ?: true }
 
     suspend fun setLanguage(code: String, displayName: String) {
         context.dataStore.edit {
@@ -60,5 +68,17 @@ class UserPreferencesStore(private val context: Context) {
 
     suspend fun markOnboardingDone() {
         context.dataStore.edit { it[Keys.ONBOARDING_DONE] = true }
+    }
+
+    suspend fun setTextScale(scale: Float) {
+        context.dataStore.edit { it[Keys.TEXT_SCALE] = scale }
+    }
+
+    suspend fun setReduceMotion(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.REDUCE_MOTION] = enabled }
+    }
+
+    suspend fun setHapticsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.HAPTICS_ENABLED] = enabled }
     }
 }

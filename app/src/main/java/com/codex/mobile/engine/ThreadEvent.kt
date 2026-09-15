@@ -150,7 +150,9 @@ data class SamuraiStepEntry(
     val timestampMillis: Long = System.currentTimeMillis()
 )
 
+
 /**
+ * Maps a raw parsed ThreadEvent to the SamuraiStep enum the strip should
  * display. Unknown/unmapped item types intentionally fall through to null
  * (caller keeps showing the previous step) rather than silently freezing
  * on a stale label with no indication anything changed.

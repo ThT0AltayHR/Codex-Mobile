@@ -1,27 +1,33 @@
 package com.codex.mobile.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.codex.mobile.data.LanguageOption
 import com.codex.mobile.data.Languages
+import com.codex.mobile.ui.components.*
 import com.codex.mobile.ui.theme.*
 import com.codex.mobile.viewmodel.OnboardingStage
 import com.codex.mobile.viewmodel.OnboardingUiState
@@ -30,214 +36,211 @@ import com.codex.mobile.viewmodel.OnboardingUiState
 fun OnboardingScreen(
     state: OnboardingUiState,
     onLanguageSelected: (LanguageOption) -> Unit,
-    onStartLogin: () -> Unit,
-    onNameSubmit: (String) -> Unit,
-    onBioSubmit: (String) -> Unit,
-    onBioSkip: () -> Unit
+    onLoginClicked: () -> Unit,
+    onNameSubmitted: (String) -> Unit,
+    onBioSubmitted: (String) -> Unit,
+    onSkipBio: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(PureBlack)
-    ) {
-        AnimatedVisibility(
-            visible = true,
-            enter = slideInVertically(animationSpec = tween(500)) { it / 3 } + fadeIn(tween(500))
-        ) {
-            when (state.stage) {
-                OnboardingStage.LANGUAGE -> LanguagePickerStep(onLanguageSelected)
-                OnboardingStage.LOGIN -> LoginStep(onStartLogin, state.errorMessage, state.isLoggingIn)
-                OnboardingStage.NAME -> NameStep(onNameSubmit)
-                OnboardingStage.BIO -> BioStep(onBioSubmit, onBioSkip)
-                OnboardingStage.DONE -> Unit
+    val stageOrder = listOf(OnboardingStage.LANGUAGE, OnboardingStage.LOGIN, OnboardingStage.NAME, OnboardingStage.BIO)
+    val stageIndex = stageOrder.indexOf(state.stage).coerceAtLeast(0)
+
+    Column(Modifier.fillMaxSize().background(PureBlack).statusBarsPadding().navigationBarsPadding()) {
+        if (state.stage != OnboardingStage.DONE) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Dimens.xl, vertical = Dimens.lg),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                stageOrder.forEachIndexed { i, _ ->
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(if (i <= stageIndex) OffWhite else BorderGray)
+                    )
+                }
+            }
+        }
+
+        AnimatedContent(
+            targetState = state.stage,
+            modifier = Modifier.weight(1f),
+            transitionSpec = {
+                (fadeIn(tween(Motion.medium)) togetherWith fadeOut(tween(Motion.fast)))
+            },
+            label = "onboarding-stage"
+        ) { stage ->
+            when (stage) {
+                OnboardingStage.LANGUAGE -> LanguageStage(onLanguageSelected)
+                OnboardingStage.LOGIN -> LoginStage(state, onLoginClicked)
+                OnboardingStage.NAME -> NameStage(onNameSubmitted)
+                OnboardingStage.BIO -> BioStage(onBioSubmitted, onSkipBio)
+                OnboardingStage.DONE -> Box(Modifier.fillMaxSize())
             }
         }
     }
 }
 
 @Composable
-private fun LanguagePickerStep(onLanguageSelected: (LanguageOption) -> Unit) {
+private fun LanguageStage(onLanguageSelected: (LanguageOption) -> Unit) {
     var query by remember { mutableStateOf("") }
-    val results = remember(query) { Languages.search(query) }
+    val filtered = remember(query) {
+        if (query.isBlank()) Languages.ALL
+        else Languages.ALL.filter { it.nativeName.contains(query, true) || it.englishName.contains(query, true) }
+    }
+    Column(Modifier.fillMaxSize().padding(horizontal = Dimens.xl)) {
+        Box(
+            Modifier.size(52.dp).clip(RoundedCornerShape(Dimens.radiusLg)).background(OffWhite),
+            contentAlignment = Alignment.Center
+        ) { CodexIcon(CIcon.Globe, tint = PureBlack, modifier = Modifier.size(24.dp)) }
+        Spacer(Modifier.height(Dimens.lg))
+        Text("Dilini seç", color = OffWhite, fontFamily = DisplayItalicFamily, fontStyle = FontStyle.Italic, fontSize = 26.sp)
+        Spacer(Modifier.height(4.dp))
+        Text("Codex seninle bu dilde konuşacak.", color = FaintWhite, fontFamily = BodyFamily, fontSize = 13.5.sp)
+        Spacer(Modifier.height(Dimens.lg))
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Spacer(Modifier.height(48.dp))
-        Text(
-            text = "Welcome to Codex",
-            style = MaterialTheme.typography.displayMedium.copy(fontStyle = FontStyle.Italic),
-            color = PureWhite
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Hangi dilde konuşmamı istersin?",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MutedWhite
-        )
-        Spacer(Modifier.height(20.dp))
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("Dil ara...") },
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedWhite) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Ara…", color = FaintWhite, fontFamily = BodyFamily) },
+            leadingIcon = { CodexIcon(CIcon.Search, tint = FaintWhite, modifier = Modifier.size(16.dp)) },
             singleLine = true,
+            shape = RoundedCornerShape(Dimens.radiusMd),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PureWhite,
-                unfocusedBorderColor = BorderGray,
-                focusedTextColor = PureWhite,
-                unfocusedTextColor = OffWhite,
-                cursorColor = PureWhite
-            ),
-            modifier = Modifier.fillMaxWidth()
+                focusedTextColor = OffWhite, unfocusedTextColor = OffWhite,
+                focusedBorderColor = OffWhite, unfocusedBorderColor = BorderGray, cursorColor = OffWhite
+            )
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Dimens.md))
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(results) { lang ->
+            items(filtered, key = { it.code }) { option ->
+                val interactionSource = remember { MutableInteractionSource() }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(PanelBlack, RoundedCornerShape(10.dp))
-                        .padding(vertical = 14.dp, horizontal = 16.dp)
-                        .then(Modifier)
-                        .clickableWithoutRipple { onLanguageSelected(lang) },
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .clickable(interactionSource = interactionSource, indication = null) { onLanguageSelected(option) }
+                        .padding(vertical = 13.dp, horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(lang.nativeName, color = PureWhite, style = MaterialTheme.typography.bodyLarge)
-                    Text(lang.englishName, color = FaintWhite, style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.weight(1f)) {
+                        Text(option.nativeName, color = OffWhite, fontFamily = BodyFamily, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Text(option.englishName, color = FaintWhite, fontFamily = BodyFamily, fontSize = 12.sp)
+                    }
+                    CodexIcon(CIcon.ChevronRight, tint = FaintWhite, modifier = Modifier.size(14.dp))
                 }
-                Spacer(Modifier.height(8.dp))
             }
         }
     }
 }
 
 @Composable
-private fun LoginStep(onStartLogin: () -> Unit, error: String?, isLoggingIn: Boolean) {
+private fun LoginStage(state: OnboardingUiState, onLoginClicked: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().padding(horizontal = Dimens.xl),
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            text = "Codex hesabınla giriş yap",
-            style = MaterialTheme.typography.displayMedium.copy(fontStyle = FontStyle.Italic),
-            color = PureWhite
-        )
+        Box(
+            Modifier.size(60.dp).clip(RoundedCornerShape(Dimens.radiusLg)).background(OffWhite),
+            contentAlignment = Alignment.Center
+        ) { CodexIcon(CIcon.CodeBrackets, tint = PureBlack, modifier = Modifier.size(28.dp)) }
+        Spacer(Modifier.height(Dimens.lg))
+        Text("Codex'e hoş geldin", color = OffWhite, fontFamily = DisplayItalicFamily, fontStyle = FontStyle.Italic, fontSize = 27.sp)
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Devam etmek için OpenAI Codex hesabınla oturum açman gerekiyor.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MutedWhite
+            "Devam etmek için OpenAI hesabınla giriş yap. Codex, cihazında çalışan gerçek bir kodlama motorunu bu hesapla kullanır.",
+            color = FaintWhite, fontFamily = BodyFamily, fontSize = 13.5.sp, lineHeight = 20.sp
         )
-        Spacer(Modifier.height(32.dp))
-        Button(
-            onClick = onStartLogin,
-            enabled = !isLoggingIn,
-            colors = ButtonDefaults.buttonColors(containerColor = PureWhite, contentColor = PureBlack),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            if (isLoggingIn) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = PureBlack, strokeWidth = 2.dp)
-            } else {
-                Text("OpenAI ile Giriş Yap", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(Dimens.xl))
+
+        if (state.errorMessage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusMd))
+                    .background(ErrorRed.copy(alpha = 0.12f))
+                    .border(BorderStroke(1.dp, ErrorRed.copy(alpha = 0.35f)), RoundedCornerShape(Dimens.radiusMd))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                CodexIcon(CIcon.Warning, tint = ErrorRed, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(state.errorMessage, color = ErrorRed, fontFamily = BodyFamily, fontSize = 12.5.sp, lineHeight = 17.sp)
             }
+            Spacer(Modifier.height(Dimens.md))
         }
-        error?.let {
-            Spacer(Modifier.height(12.dp))
-            Text(it, color = ErrorRed, style = MaterialTheme.typography.bodyMedium)
+
+        if (state.isLoggingIn) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 15.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(color = OffWhite, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Tarayıcıda oturum açılıyor…", color = MutedWhite, fontFamily = BodyFamily, fontSize = 13.sp)
+            }
+        } else {
+            PrimaryButton(text = "OpenAI ile giriş yap", leadingIcon = CIcon.Person, onClick = onLoginClicked)
         }
+        Spacer(Modifier.height(Dimens.md))
+        Text(
+            "Codex, resmi olmayan bağımsız bir istemcidir; OpenAI'nin mobil uygulaması değildir.",
+            color = GhostWhite, fontFamily = BodyFamily, fontSize = 10.5.sp, lineHeight = 15.sp
+        )
     }
 }
 
 @Composable
-private fun NameStep(onSubmit: (String) -> Unit) {
+private fun NameStage(onNameSubmitted: (String) -> Unit) {
     var name by remember { mutableStateOf("") }
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Lütfen adınızı girin",
-            style = MaterialTheme.typography.displayMedium.copy(fontStyle = FontStyle.Italic),
-            color = PureWhite
-        )
-        Spacer(Modifier.height(20.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = Dimens.xl), verticalArrangement = Arrangement.Center) {
+        CodexIcon(CIcon.Sparkle, tint = OffWhite, modifier = Modifier.size(30.dp))
+        Spacer(Modifier.height(Dimens.lg))
+        Text("Sana nasıl hitap edelim?", color = OffWhite, fontFamily = DisplayItalicFamily, fontStyle = FontStyle.Italic, fontSize = 25.sp)
+        Spacer(Modifier.height(Dimens.lg))
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
-            placeholder = { Text("Adınız") },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Adın", color = FaintWhite, fontFamily = BodyFamily) },
             singleLine = true,
+            shape = RoundedCornerShape(Dimens.radiusMd),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { if (name.isNotBlank()) onNameSubmitted(name) }),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PureWhite,
-                unfocusedBorderColor = BorderGray,
-                focusedTextColor = PureWhite,
-                unfocusedTextColor = OffWhite,
-                cursorColor = PureWhite
-            ),
-            modifier = Modifier.fillMaxWidth()
+                focusedTextColor = OffWhite, unfocusedTextColor = OffWhite,
+                focusedBorderColor = OffWhite, unfocusedBorderColor = BorderGray, cursorColor = OffWhite
+            )
         )
-        Spacer(Modifier.height(20.dp))
-        Button(
-            onClick = { if (name.isNotBlank()) onSubmit(name) },
-            colors = ButtonDefaults.buttonColors(containerColor = PureWhite, contentColor = PureBlack),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text("Devam et") }
+        Spacer(Modifier.height(Dimens.lg))
+        PrimaryButton(text = "Devam et", enabled = name.isNotBlank(), onClick = { onNameSubmitted(name) })
     }
 }
 
 @Composable
-private fun BioStep(onSubmit: (String) -> Unit, onSkip: () -> Unit) {
+private fun BioStage(onBioSubmitted: (String) -> Unit, onSkip: () -> Unit) {
     var bio by remember { mutableStateOf("") }
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Kendinizi kısaca tanımlar mısınız?",
-            style = MaterialTheme.typography.displayMedium.copy(fontStyle = FontStyle.Italic),
-            color = PureWhite
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Kim olduğunuzu, ne iş yaptığınızı bilirsem sana daha iyi yardımcı olurum.",
-            color = MutedWhite,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(20.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = Dimens.xl), verticalArrangement = Arrangement.Center) {
+        CodexIcon(CIcon.FileGeneric, tint = OffWhite, modifier = Modifier.size(30.dp))
+        Spacer(Modifier.height(Dimens.lg))
+        Text("Kendinden bahset", color = OffWhite, fontFamily = DisplayItalicFamily, fontStyle = FontStyle.Italic, fontSize = 25.sp)
+        Spacer(Modifier.height(4.dp))
+        Text("Ne üzerinde çalışıyorsun, hangi dilleri kullanıyorsun? (isteğe bağlı)", color = FaintWhite, fontFamily = BodyFamily, fontSize = 12.5.sp)
+        Spacer(Modifier.height(Dimens.lg))
         OutlinedTextField(
             value = bio,
             onValueChange = { bio = it },
-            placeholder = { Text("Örn: Yazılım geliştiriciyim, mobil uygulamalarla ilgileniyorum...") },
-            minLines = 3,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
+            placeholder = { Text("Örn: Android geliştiricisiyim, Kotlin ve Compose kullanıyorum…", color = FaintWhite, fontFamily = BodyFamily, fontSize = 13.sp) },
+            shape = RoundedCornerShape(Dimens.radiusMd),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PureWhite,
-                unfocusedBorderColor = BorderGray,
-                focusedTextColor = PureWhite,
-                unfocusedTextColor = OffWhite,
-                cursorColor = PureWhite
-            ),
-            modifier = Modifier.fillMaxWidth()
+                focusedTextColor = OffWhite, unfocusedTextColor = OffWhite,
+                focusedBorderColor = OffWhite, unfocusedBorderColor = BorderGray, cursorColor = OffWhite
+            )
         )
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = { onSubmit(bio) },
-            colors = ButtonDefaults.buttonColors(containerColor = PureWhite, contentColor = PureBlack),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text("Bitir") }
-        Spacer(Modifier.height(10.dp))
-        TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
-            Text("Şimdilik atla", color = FaintWhite)
+        Spacer(Modifier.height(Dimens.lg))
+        PrimaryButton(text = "Bitir", onClick = { onBioSubmitted(bio) })
+        Spacer(Modifier.height(8.dp))
+        Box(Modifier.fillMaxWidth().clickable(indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onSkip).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+            Text("Şimdilik atla", color = FaintWhite, fontFamily = BodyFamily, fontSize = 13.sp)
         }
     }
 }
-
-@Composable
-private fun Modifier.clickableWithoutRipple(onClick: () -> Unit): Modifier = this.then(
-    Modifier.clickable(
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null,
-        onClick = onClick
-    )
-)
