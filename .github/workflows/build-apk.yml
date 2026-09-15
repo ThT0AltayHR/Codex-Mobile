@@ -74,11 +74,17 @@ jobs:
         run: |
           apk="$(find app/build/outputs/apk/release -name '*.apk' -print -quit)"
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
-          "$apksigner" verify --verbose "$apk"
+          zipalign="$(find "$ANDROID_HOME/build-tools" -name zipalign -type f | sort -V | tail -1)"
+          "$zipalign" -c -P 16 -v 4 "$apk"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          "$apksigner" verify --verbose "$apk" | tee "$RUNNER_TEMP/apksigner-verification.txt"
+          grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/apksigner-verification.txt"
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/apksigner-verification.txt"
+          grep -q 'Number of signers: 1' "$RUNNER_TEMP/apksigner-verification.txt"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: codex-mobile-release-apk
+          name: codex-mobile-release-apk-v1.0.2
           path: app/build/outputs/apk/release/app-release.apk
           retention-days: 30

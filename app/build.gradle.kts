@@ -11,8 +11,8 @@ android {
         applicationId = "com.codex.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
 
         // codex.bin is aarch64-android only — we only ship this ABI.
         ndk {
@@ -33,6 +33,12 @@ android {
 
     signingConfigs {
         create("release") {
+            // Keep legacy JAR signing as well as modern APK signing. This
+            // avoids "invalid package" errors on Android installers that do
+            // not accept a v2-only APK.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
             if (hasReleaseSigning) {
                 storeFile = file(releaseStoreFile.get())
                 storePassword = releaseStorePassword.get()
