@@ -367,6 +367,7 @@ class ChatViewModel(
     /** Lists real files under this conversation's workspace directory — used by the Files tab. Never fabricated; a plain recursive directory walk. */
     fun listWorkspaceFiles(): List<WorkspaceEntry> {
         val convoId = _state.value.activeConversationId ?: return emptyList()
+        val service = boundService ?: return emptyList()
         val root = service.runtime.workspaceDir(convoId)
         if (!root.exists()) return emptyList()
         return try {
@@ -388,6 +389,7 @@ class ChatViewModel(
     /** Reads up to 40KB of a workspace file's text content for the preview sheet — real file content, truncated for safety, never summarized or altered. */
     fun readWorkspaceFilePreview(relativePath: String): String {
         val convoId = _state.value.activeConversationId ?: return ""
+        val service = boundService ?: return ""
         val root = service.runtime.workspaceDir(convoId)
         val target = java.io.File(root, relativePath)
         if (!target.exists() || !target.isFile) return ""
@@ -435,7 +437,7 @@ class ChatViewModel(
                 // agent_message itself since that's the reply text, not a
                 // "step".
                 if (parsed.itemType != "agent_message") {
-                    val entry = ThreadEvent.toEntry(parsed.itemType, parsed.raw)
+                    val entry = SamuraiStepMapper.toEntry(parsed.itemType, parsed.raw)
                     _state.value = _state.value.copy(stepHistory = _state.value.stepHistory + entry)
                 }
                 if (parsed.itemType == "web_search") {

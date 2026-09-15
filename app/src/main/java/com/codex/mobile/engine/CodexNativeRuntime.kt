@@ -207,20 +207,6 @@ class CodexNativeRuntime(private val context: Context) {
     fun destroyWithChildren() {
         running.set(false)
         val proc = process ?: return
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                val handle = proc.toHandle()
-                handle.descendants().forEach { descendant ->
-                    try {
-                        descendant.destroyForcibly()
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            // descendants() can throw on some OEM kernels that restrict
-            // /proc access; the direct destroy below still runs.
-        }
         if (proc.isAlive) {
             proc.destroyForcibly()
         }
